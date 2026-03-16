@@ -19,7 +19,7 @@ from dotenv import load_dotenv
 from . import rag
 from fastapi import FastAPI, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
@@ -74,6 +74,7 @@ def save_memory(data: dict):
 class NewConversation(BaseModel):
     title: str = "New Conversation"
     system_prompt: str = "You are a helpful assistant."
+    folder_id: str | None = None
 
 
 class FileRef(BaseModel):
@@ -175,11 +176,14 @@ async def list_conversations():
 async def create_conversation(body: NewConversation):
     memory = load_memory()
     cid = str(uuid.uuid4())
+    folder_id = body.folder_id
+    if folder_id and folder_id not in memory.get("folders", {}):
+        folder_id = None
     memory["conversations"][cid] = {
         "title": body.title,
         "system_prompt": body.system_prompt,
         "model": "claude-sonnet-4-6",
-        "folder_id": None,
+        "folder_id": folder_id,
         "messages": [],
         "created_at": datetime.now(timezone.utc).isoformat(),
     }
@@ -565,6 +569,51 @@ def _call_openai(model: str, system: str, messages: list[dict]) -> str:
     return response.choices[0].message.content
 
 
+def _stream_anthropic(model: str, system: str, messages: list[dict]):
+    api_messages = []
+    for m in messages:
+        if m["role"] == "user" and m.get("files"):
+            api_messages.append({
+                "role": "user",
+                "content": build_anthropic_blocks(m["content"], m["files"]),
+            })
+        else:
+            api_messages.append({"role": m["role"], "content": m["content"]})
+
+    with anthropic_client.messages.stream(
+        model=model,
+        max_tokens=4096,
+        system=system,
+        messages=api_messages,
+    ) as stream:
+        for text in stream.text_stream:
+            yield text
+
+
+def _stream_openai(model: str, system: str, messages: list[dict]):
+    api_messages = [{"role": "system", "content": system}]
+    for m in messages:
+        if m["role"] == "user" and m.get("files"):
+            api_messages.append({
+                "role": "user",
+                "content": build_openai_content(m["content"], m["files"]),
+            })
+        else:
+            api_messages.append({"role": m["role"], "content": m["content"]})
+
+    kwargs = {"model": model, "messages": api_messages, "stream": True}
+    if model in OPENAI_REASONING_MODELS:
+        kwargs["max_completion_tokens"] = 4096
+    else:
+        kwargs["max_tokens"] = 4096
+
+    response = openai_client.chat.completions.create(**kwargs)
+    for chunk in response:
+        delta = chunk.choices[0].delta
+        if delta and delta.content:
+            yield delta.content
+
+
 @app.post("/chat")
 async def chat(body: ChatMessage):
     memory = load_memory()
@@ -628,3 +677,91 @@ async def chat(body: ChatMessage):
 
     save_memory(memory)
     return {"reply": reply, "title": conv["title"]}
+
+
+@app.post("/chat/stream")
+async def chat_stream(body: ChatMessage):
+    memory = load_memory()
+    conv = memory["conversations"].get(body.conversation_id)
+    if not conv:
+        raise HTTPException(status_code=404, detail="Conversation not found")
+
+    model = body.model
+    if model not in AVAILABLE_MODELS:
+        model = "claude-sonnet-4-6"
+    conv["model"] = model
+
+    file_refs = []
+    for f in body.files:
+        file_path = _find_upload(f.file_id)
+        if file_path:
+            file_refs.append({"file_id": f.file_id, "filename": f.filename})
+
+    stored_message = {"role": "user", "content": body.message}
+    if file_refs:
+        stored_message["files"] = file_refs
+    conv["messages"].append(stored_message)
+    save_memory(memory)
+
+    full_system = _build_system_prompt(model, conv.get("system_prompt", ""))
+    provider = AVAILABLE_MODELS[model]["provider"]
+
+    folder_id = conv.get("folder_id")
+    if folder_id:
+        chain = get_folder_chain(folder_id, memory)
+        try:
+            rag_results = rag.search_folder_chain(chain, body.message, top_k=5)
+        except Exception as e:
+            logger.warning("RAG search failed: %s", e)
+            rag_results = []
+        if rag_results:
+            chunks = []
+            for r in rag_results:
+                chunks.append(f'<document source="{r["source"]}" relevance="{r["score"]:.2f}">\n{r["content"]}\n</document>')
+            rag_block = "<knowledge_base>\n" + "\n".join(chunks) + "\n</knowledge_base>"
+            full_system += (
+                "\n\nYou have access to a knowledge base. Use it to inform your answers when relevant. "
+                "Cite sources when you use information from the knowledge base.\n\n" + rag_block
+            )
+            logger.info("RAG: injected %d chunks from %d folders", len(rag_results), len(chain))
+
+    logger.info("Chat stream: model=%s, provider=%s, conv=%s, files=%d", model, provider, body.conversation_id[:8], len(file_refs))
+
+    def event_generator():
+        full_response = []
+        try:
+            if provider == "anthropic":
+                stream = _stream_anthropic(model, full_system, conv["messages"])
+            else:
+                stream = _stream_openai(model, full_system, conv["messages"])
+
+            for chunk in stream:
+                full_response.append(chunk)
+                yield f"data: {json.dumps({'type': 'chunk', 'content': chunk})}\n\n"
+
+            reply = "".join(full_response)
+
+            memory2 = load_memory()
+            conv2 = memory2["conversations"].get(body.conversation_id)
+            if conv2:
+                conv2["messages"].append({"role": "assistant", "content": reply})
+                if len(conv2["messages"]) == 2 and conv2.get("title") == "New Conversation":
+                    try:
+                        conv2["title"] = generate_title(body.message, provider)
+                    except Exception as e:
+                        logger.warning("Title generation failed: %s", e)
+                        conv2["title"] = body.message[:40]
+                save_memory(memory2)
+                yield f"data: {json.dumps({'type': 'done', 'title': conv2['title']})}\n\n"
+            else:
+                yield f"data: {json.dumps({'type': 'done', 'title': 'New Conversation'})}\n\n"
+
+        except Exception as e:
+            logger.error("Stream error: %s", e)
+            yield f"data: {json.dumps({'type': 'error', 'message': str(e)})}\n\n"
+
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "Connection": "keep-alive", "X-Accel-Buffering": "no"},
+    )

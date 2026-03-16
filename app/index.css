@@ -204,6 +204,45 @@ body {
 }
 #new-btn:hover, #new-folder-btn:hover { background: var(--accent-hover); }
 
+/* New conversation folder popup */
+#new-conv-overlay {
+  display: none; position: fixed; inset: 0; z-index: 500;
+  background: rgba(0,0,0,.45); align-items: center; justify-content: center;
+}
+#new-conv-overlay.visible { display: flex; }
+#new-conv-popup {
+  background: var(--panel-bg); color: var(--text);
+  border-radius: 14px; width: 320px; padding: 20px;
+  box-shadow: 0 8px 40px rgba(0,0,0,.3);
+  transition: background .25s, color .25s;
+}
+#new-conv-popup h3 {
+  margin: 0 0 14px; font-size: 0.95rem; font-weight: 600;
+}
+#new-conv-popup select {
+  width: 100%; padding: 8px 10px; font-size: 0.85rem;
+  font-family: inherit; border: 1px solid var(--input-border);
+  border-radius: 8px; background: var(--panel-bg); color: var(--text);
+  outline: none; cursor: pointer; margin-bottom: 14px;
+  transition: border-color .15s, background .25s, color .25s;
+}
+#new-conv-popup select:focus { border-color: var(--accent); }
+#new-conv-popup-actions {
+  display: flex; gap: 8px; justify-content: flex-end;
+}
+#new-conv-popup-actions button {
+  padding: 8px 16px; border: none; border-radius: 8px;
+  font-size: 0.82rem; cursor: pointer; transition: background .15s;
+}
+#new-conv-cancel {
+  background: transparent; color: var(--muted);
+}
+#new-conv-cancel:hover { background: rgba(0,0,0,.06); }
+#new-conv-create {
+  background: var(--accent); color: #fff;
+}
+#new-conv-create:hover { background: var(--accent-hover); }
+
 #conv-list { flex: 1; overflow-y: auto; }
 
 /* Folder rows */
@@ -319,6 +358,13 @@ body {
   cursor: pointer; transition: border-color .15s, background .25s, color .25s;
 }
 #model-select:focus { border-color: var(--accent); }
+#export-btn {
+  padding: 5px 12px; font-size: 0.78rem; font-family: inherit;
+  background: transparent; color: var(--muted); border: 1px solid var(--input-border);
+  border-radius: 6px; cursor: pointer; white-space: nowrap;
+  transition: border-color .15s, color .15s;
+}
+#export-btn:hover { border-color: var(--accent); color: var(--accent); }
 #model-tooltip {
   display: none; position: fixed; z-index: 200;
   background: var(--tooltip-bg); color: var(--tooltip-text);
@@ -452,6 +498,23 @@ body {
 }
 #send-btn:hover:not(:disabled) { background: var(--accent-hover); }
 #send-btn:disabled { opacity: .45; cursor: not-allowed; }
+#stop-btn {
+  padding: 10px 20px; background: #ff6b6b; color: #fff;
+  border: none; border-radius: 10px; cursor: pointer;
+  font-size: 0.93rem; transition: background .15s; flex-shrink: 0;
+}
+#stop-btn:hover { background: #e55a5a; }
+
+/* Streaming cursor */
+.bubble.streaming { min-height: 1.5em; }
+.bubble .cursor {
+  display: inline; animation: blink .8s infinite;
+  color: var(--accent); font-weight: normal;
+}
+@keyframes blink {
+  0%, 50% { opacity: 1; }
+  51%, 100% { opacity: 0; }
+}
 
 /* Toast notifications */
 #toast {

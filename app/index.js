@@ -603,11 +603,35 @@ function renderSidebar() {
   el.innerHTML = html;
 }
 
+function showNewConvPopup() {
+  const select = document.getElementById('new-conv-folder');
+  const folders = Object.values(folderMap).sort((a,b) => a.name.localeCompare(b.name));
+  let html = '<option value="">No folder</option>';
+  function addOptions(parentId, depth) {
+    folders.filter(f => (f.parent_id || null) === (parentId || null))
+      .forEach(f => {
+        const indent = '\u00A0\u00A0'.repeat(depth);
+        html += `<option value="${f.id}">${indent}${esc(f.name)}</option>`;
+        addOptions(f.id, depth + 1);
+      });
+  }
+  addOptions(null, 0);
+  select.innerHTML = html;
+  document.getElementById('new-conv-overlay').classList.add('visible');
+  select.focus();
+}
+
+function closeNewConvPopup() {
+  document.getElementById('new-conv-overlay').classList.remove('visible');
+}
+
 async function newConv() {
+  const folderId = document.getElementById('new-conv-folder')?.value || null;
+  closeNewConvPopup();
   try {
     const res  = await fetch(`${API}/conversations`, {
       method: 'POST', headers: h(),
-      body: JSON.stringify({ title: 'New Conversation' })
+      body: JSON.stringify({ title: 'New Conversation', folder_id: folderId || null })
     });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const data = await res.json();
@@ -665,6 +689,41 @@ async function delConv(id) {
   }
 }
 
+// ── Export ─────────────────────────────────────────────────────────────────
+async function exportConv() {
+  if (!currentId) { showToast('Select a conversation first.'); return; }
+  try {
+    const res = await fetch(`${API}/conversations/${currentId}`);
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const conv = await res.json();
+
+    const title = conv.title || 'Conversation';
+    let md = `# ${title}\n\n`;
+
+    conv.messages.forEach((m, i) => {
+      const label = m.role === 'user' ? 'User' : 'Assistant';
+      md += `**${label}:**\n${m.content}\n\n`;
+      if (i < conv.messages.length - 1 && m.role === 'assistant') {
+        md += '---\n\n';
+      }
+    });
+
+    const slug = title.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'conversation';
+    const blob = new Blob([md.trimEnd() + '\n'], { type: 'text/markdown' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `${slug}.md`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+  } catch (err) {
+    console.error('Export failed:', err);
+    showToast('Failed to export conversation.');
+  }
+}
+
 // ── System prompt ──────────────────────────────────────────────────────────
 function toggleSP() {
   const body  = document.getElementById('sp-body');
@@ -692,6 +751,8 @@ async function saveSP() {
 }
 
 // ── Chat ───────────────────────────────────────────────────────────────────
+let currentAbortController = null;
+
 async function send() {
   if (!currentId) { alert('Select or create a conversation first.'); return; }
   const input = document.getElementById('msg-input');
@@ -700,7 +761,8 @@ async function send() {
 
   input.value = '';
   autoResize(input);
-  document.getElementById('send-btn').disabled = true;
+  document.getElementById('send-btn').style.display = 'none';
+  document.getElementById('stop-btn').style.display = 'inline-block';
   document.getElementById('placeholder')?.remove();
 
   let fileRefs = [];
@@ -709,30 +771,80 @@ async function send() {
   }
 
   addBubble('user', msg, fileRefs.map(f => f.filename));
-  const thinking = addThinking();
+  const bubble = addStreamingBubble();
+
+  currentAbortController = new AbortController();
 
   try {
-    const res  = await fetch(`${API}/chat`, {
+    const res = await fetch(`${API}/chat/stream`, {
       method: 'POST', headers: h(),
-      body: JSON.stringify({ conversation_id: currentId, message: msg, model: getModel(), files: fileRefs })
+      body: JSON.stringify({ conversation_id: currentId, message: msg, model: getModel(), files: fileRefs }),
+      signal: currentAbortController.signal,
     });
-    const data = await res.json();
-    if (!res.ok) throw new Error(data.detail || `HTTP ${res.status}`);
-    if (!data.reply) throw new Error('Invalid response from server');
-    thinking.remove();
-    addBubble('assistant', data.reply);
-    if (convMap[currentId]) {
-      convMap[currentId].title = data.title;
-      renderSidebar();
-    }
-  } catch (err) {
-    console.error('Chat error:', err);
-    thinking.remove();
-    addBubble('assistant', `⚠️ ${err.message || 'Could not reach the server.'}`);
-  }
 
-  document.getElementById('send-btn').disabled = false;
-  input.focus();
+    if (!res.ok) {
+      const err = await res.json();
+      throw new Error(err.detail || `HTTP ${res.status}`);
+    }
+
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+    let fullContent = '';
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+
+      buffer += decoder.decode(value, { stream: true });
+      const parts = buffer.split('\n\n');
+      buffer = parts.pop() || '';
+
+      for (const part of parts) {
+        if (!part.startsWith('data: ')) continue;
+        try {
+          const data = JSON.parse(part.slice(6));
+          if (data.type === 'chunk') {
+            fullContent += data.content;
+            updateStreamingBubble(bubble, fullContent);
+          } else if (data.type === 'done') {
+            finalizeStreamingBubble(bubble, fullContent);
+            if (convMap[currentId]) {
+              convMap[currentId].title = data.title;
+              renderSidebar();
+            }
+          } else if (data.type === 'error') {
+            throw new Error(data.message);
+          }
+        } catch (e) {
+          if (!(e instanceof SyntaxError)) throw e;
+          console.warn('Failed to parse SSE data:', part);
+        }
+      }
+    }
+
+    if (bubble.classList.contains('streaming')) {
+      finalizeStreamingBubble(bubble, fullContent);
+    }
+
+  } catch (err) {
+    if (err.name === 'AbortError') {
+      finalizeStreamingBubble(bubble, bubble._content || '');
+    } else {
+      console.error('Chat error:', err);
+      finalizeStreamingBubble(bubble, `⚠️ ${err.message || 'Could not reach the server.'}`);
+    }
+  } finally {
+    currentAbortController = null;
+    document.getElementById('stop-btn').style.display = 'none';
+    document.getElementById('send-btn').style.display = 'inline-block';
+    document.getElementById('send-btn').disabled = false;
+    input.focus();
+  }
+}
+
+function stopGeneration() {
+  if (currentAbortController) currentAbortController.abort();
 }
 
 function addBubble(role, content, fileNames) {
@@ -758,14 +870,31 @@ function addBubble(role, content, fileNames) {
   return wrap;
 }
 
-function addThinking() {
+function addStreamingBubble() {
   const area = document.getElementById('chat-area');
   const wrap = document.createElement('div');
   wrap.className = 'msg assistant';
-  wrap.innerHTML = '<div class="bubble thinking">Thinking…</div>';
+  const bubble = document.createElement('div');
+  bubble.className = 'bubble streaming';
+  bubble._content = '';
+  bubble.innerHTML = '<span class="cursor">▊</span>';
+  wrap.appendChild(bubble);
   area.appendChild(wrap);
   scrollDown();
-  return wrap;
+  return bubble;
+}
+
+function updateStreamingBubble(bubble, content) {
+  bubble._content = content;
+  bubble.innerHTML = marked.parse(content) + '<span class="cursor">▊</span>';
+  scrollDown();
+}
+
+function finalizeStreamingBubble(bubble, content) {
+  bubble.classList.remove('streaming');
+  bubble._content = content;
+  bubble.innerHTML = marked.parse(content);
+  scrollDown();
 }
 
 // ── Init ───────────────────────────────────────────────────────────────────

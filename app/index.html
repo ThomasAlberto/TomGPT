@@ -22,7 +22,7 @@
     </div>
   </div>
   <div id="sidebar-actions">
-    <button id="new-btn" onclick="newConv()">New Conversation</button>
+    <button id="new-btn" onclick="showNewConvPopup()">New Conversation</button>
     <button id="new-folder-btn" onclick="newFolder()">New Folder</button>
   </div>
   <div id="conv-list"></div>
@@ -45,6 +45,7 @@
           <option disabled selected>Loading models...</option>
         </select>
       </div>
+      <button id="export-btn" onclick="exportConv()" title="Export to Markdown">Export</button>
     </div>
     <div id="sp-body">
       <textarea id="sp-input" placeholder="e.g. You are a concise assistant that always replies in bullet points."></textarea>
@@ -73,6 +74,7 @@
         placeholder="Message… (Enter to send, Shift+Enter for newline)"
         onkeydown="handleKey(event)" oninput="autoResize(this)"></textarea>
       <button id="send-btn" onclick="send()">Send</button>
+      <button id="stop-btn" onclick="stopGeneration()" style="display:none">Stop</button>
     </div>
   </div>
 
@@ -100,6 +102,18 @@
     <div id="kb-chain-section">
       <div id="kb-chain-title">Inherited Knowledge</div>
       <div id="kb-chain"></div>
+    </div>
+  </div>
+</div>
+
+<!-- New Conversation Popup -->
+<div id="new-conv-overlay" onclick="closeNewConvPopup()">
+  <div id="new-conv-popup" onclick="event.stopPropagation()">
+    <h3>New Conversation</h3>
+    <select id="new-conv-folder"></select>
+    <div id="new-conv-popup-actions">
+      <button id="new-conv-cancel" onclick="closeNewConvPopup()">Cancel</button>
+      <button id="new-conv-create" onclick="newConv()">Create</button>
     </div>
   </div>
 </div>
