@@ -1,0 +1,6 @@
+.env
+
+memory.json
+
+uploads/
+chroma_db/
