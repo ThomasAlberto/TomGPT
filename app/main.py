@@ -59,6 +59,7 @@ def load_memory() -> dict:
     except (FileNotFoundError, json.JSONDecodeError):
         data = {"conversations": {}}
     data.setdefault("folders", {})
+    data.setdefault("prompt_templates", {})
     return data
 
 
@@ -102,6 +103,11 @@ class NewFolder(BaseModel):
     parent_id: str | None = None
 
 
+class PromptTemplate(BaseModel):
+    name: str
+    content: str
+
+
 class FolderRename(BaseModel):
     name: str
 
@@ -119,6 +125,9 @@ AVAILABLE_MODELS = {
     "claude-sonnet-4-20250514":  {"name": "Claude Sonnet 4",   "provider": "anthropic", "maker": "Anthropic", "input_price": 3.00,  "output_price": 15.00},
     "claude-haiku-3-5-20241022": {"name": "Claude 3.5 Haiku",  "provider": "anthropic", "maker": "Anthropic", "input_price": 0.80,  "output_price": 4.00},
     # OpenAI
+    "gpt-5.4":                   {"name": "GPT-5.4",           "provider": "openai",    "maker": "OpenAI",    "input_price": 2.50,  "output_price": 15.00},
+    "gpt-5.3":                   {"name": "GPT-5.3",           "provider": "openai",    "maker": "OpenAI",    "input_price": 1.75,  "output_price": 14.00},
+    "gpt-5.2":                   {"name": "GPT-5.2",           "provider": "openai",    "maker": "OpenAI",    "input_price": 1.75,  "output_price": 14.00},
     "gpt-5":                     {"name": "GPT-5",             "provider": "openai",    "maker": "OpenAI",    "input_price": 1.25,  "output_price": 10.00},
     "gpt-4.1":                   {"name": "GPT-4.1",           "provider": "openai",    "maker": "OpenAI",    "input_price": 2.00,  "output_price": 8.00},
     "gpt-4.1-mini":              {"name": "GPT-4.1 Mini",      "provider": "openai",    "maker": "OpenAI",    "input_price": 0.40,  "output_price": 1.60},
@@ -126,7 +135,7 @@ AVAILABLE_MODELS = {
     "gpt-4o":                    {"name": "GPT-4o",            "provider": "openai",    "maker": "OpenAI",    "input_price": 2.50,  "output_price": 10.00},
     "gpt-4o-mini":               {"name": "GPT-4o Mini",       "provider": "openai",    "maker": "OpenAI",    "input_price": 0.15,  "output_price": 0.60},
     "o3":                        {"name": "o3",                "provider": "openai",    "maker": "OpenAI",    "input_price": 2.00,  "output_price": 8.00},
-    "o4-mini":                   {"name": "o4-mini",           "provider": "openai",    "maker": "OpenAI",    "input_price": 1.10,  "output_price": 4.40},
+    "o4-mini":                   {"name": "o4-mini",           "provider": "openai",    "maker": "OpenAI",    "input_price": 0.55,  "output_price": 2.20},
     "o3-mini":                   {"name": "o3-mini",           "provider": "openai",    "maker": "OpenAI",    "input_price": 1.10,  "output_price": 4.40},
 }
 
@@ -245,6 +254,41 @@ async def move_conversation_to_folder(conversation_id: str, body: FolderMove):
     if not conv:
         raise HTTPException(status_code=404, detail="Conversation not found")
     conv["folder_id"] = body.folder_id
+    save_memory(memory)
+    return {"ok": True}
+
+
+# ── Prompt Template CRUD ───────────────────────────────────────────────────
+
+@app.get("/prompt-templates")
+async def list_prompt_templates():
+    memory = load_memory()
+    return [{"id": tid, **t} for tid, t in memory["prompt_templates"].items()]
+
+
+@app.post("/prompt-templates")
+async def create_prompt_template(body: PromptTemplate):
+    memory = load_memory()
+    tid = str(uuid.uuid4())
+    memory["prompt_templates"][tid] = {"name": body.name, "content": body.content}
+    save_memory(memory)
+    return {"id": tid, "name": body.name, "content": body.content}
+
+
+@app.put("/prompt-templates/{template_id}")
+async def update_prompt_template(template_id: str, body: PromptTemplate):
+    memory = load_memory()
+    if template_id not in memory["prompt_templates"]:
+        raise HTTPException(status_code=404, detail="Template not found")
+    memory["prompt_templates"][template_id] = {"name": body.name, "content": body.content}
+    save_memory(memory)
+    return {"id": template_id, "name": body.name, "content": body.content}
+
+
+@app.delete("/prompt-templates/{template_id}")
+async def delete_prompt_template(template_id: str):
+    memory = load_memory()
+    memory["prompt_templates"].pop(template_id, None)
     save_memory(memory)
     return {"ok": True}
 

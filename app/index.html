@@ -48,6 +48,12 @@
       <button id="export-btn" onclick="exportConv()" title="Export to Markdown">Export</button>
     </div>
     <div id="sp-body">
+      <div id="sp-template-row">
+        <select id="sp-template-select" onchange="onSpTemplateChange()">
+          <option value="">Custom (this conversation only)</option>
+        </select>
+        <button id="sp-template-edit-btn" onclick="openSpTemplateModal()" title="Manage templates">✎</button>
+      </div>
       <textarea id="sp-input" placeholder="e.g. You are a concise assistant that always replies in bullet points."></textarea>
       <button id="sp-save" onclick="saveSP()">Save</button>
     </div>
@@ -103,6 +109,26 @@
       <div id="kb-chain-title">Inherited Knowledge</div>
       <div id="kb-chain"></div>
     </div>
+  </div>
+</div>
+
+<!-- System Prompt Template Modal -->
+<div id="spt-overlay" onclick="closeSpTemplateModal()">
+  <div id="spt-modal" onclick="event.stopPropagation()">
+    <div id="spt-header">
+      <span id="spt-title">Prompt Templates</span>
+      <button id="spt-close" onclick="closeSpTemplateModal()">&#x2715;</button>
+    </div>
+    <div id="spt-list"></div>
+    <div id="spt-editor" style="display:none">
+      <input id="spt-name" type="text" placeholder="Template name">
+      <textarea id="spt-content" placeholder="Enter the system prompt..."></textarea>
+      <div id="spt-editor-actions">
+        <button id="spt-discard" onclick="cancelSpTemplateEdit()">Cancel</button>
+        <button id="spt-save" onclick="saveSpTemplate()">Save</button>
+      </div>
+    </div>
+    <button id="spt-new-btn" onclick="startNewSpTemplate()">+ New Template</button>
   </div>
 </div>
 

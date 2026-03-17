@@ -386,12 +386,112 @@ body {
   transition: border-color .15s, background .25s, color .25s;
 }
 #sp-input:focus { border-color: var(--accent); }
+#sp-template-row {
+  display: flex; align-items: center; gap: 6px; margin-bottom: 8px;
+}
+#sp-template-select {
+  flex: 1; padding: 6px 8px; font-size: 0.82rem; font-family: inherit;
+  border: 1px solid var(--input-border); border-radius: 6px;
+  background: var(--panel-bg); color: var(--text); outline: none;
+  cursor: pointer; transition: border-color .15s, background .25s, color .25s;
+}
+#sp-template-select:focus { border-color: var(--accent); }
+#sp-template-edit-btn {
+  background: none; border: 1px solid var(--input-border); border-radius: 6px;
+  color: var(--muted); cursor: pointer; font-size: 0.9rem;
+  padding: 4px 8px; transition: border-color .15s, color .15s;
+}
+#sp-template-edit-btn:hover { border-color: var(--accent); color: var(--accent); }
 #sp-save {
   margin-top: 8px; padding: 6px 16px; font-size: 0.8rem;
   background: var(--accent); color: #fff; border: none;
   border-radius: 6px; cursor: pointer; transition: background .15s;
 }
 #sp-save:hover { background: var(--accent-hover); }
+
+/* ── Prompt Template Modal ────────────────────────────────── */
+#spt-overlay {
+  display: none; position: fixed; inset: 0; z-index: 500;
+  background: rgba(0,0,0,.45); align-items: center; justify-content: center;
+}
+#spt-overlay.visible { display: flex; }
+#spt-modal {
+  background: var(--panel-bg); color: var(--text);
+  border-radius: 14px; width: 440px; max-height: 80vh;
+  display: flex; flex-direction: column;
+  box-shadow: 0 8px 40px rgba(0,0,0,.3);
+  overflow: hidden; transition: background .25s, color .25s;
+}
+#spt-header {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 16px 20px; border-bottom: 1px solid var(--panel-border);
+}
+#spt-title { font-weight: 600; font-size: 0.95rem; }
+#spt-close {
+  background: none; border: none; color: var(--muted);
+  cursor: pointer; font-size: 1rem; padding: 2px 6px;
+  transition: color .15s;
+}
+#spt-close:hover { color: #ff6b6b; }
+#spt-list {
+  flex: 1; overflow-y: auto; padding: 8px 20px; max-height: 240px;
+}
+.spt-empty {
+  color: var(--placeholder); font-size: 0.85rem;
+  text-align: center; padding: 16px 0;
+}
+.spt-item {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 8px 0; border-bottom: 1px solid var(--panel-border);
+  font-size: 0.85rem;
+}
+.spt-item-name {
+  flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.spt-item-actions { display: flex; gap: 4px; flex-shrink: 0; }
+.spt-item-edit, .spt-item-del {
+  background: none; border: none; color: var(--muted);
+  cursor: pointer; font-size: 0.82rem; padding: 2px 5px;
+  transition: color .15s;
+}
+.spt-item-edit:hover { color: var(--accent); }
+.spt-item-del:hover { color: #ff6b6b; }
+#spt-editor {
+  padding: 12px 20px; border-top: 1px solid var(--panel-border);
+}
+#spt-name {
+  width: 100%; padding: 8px 10px; font-size: 0.85rem; font-family: inherit;
+  border: 1px solid var(--input-border); border-radius: 6px;
+  background: var(--panel-bg); color: var(--text); outline: none;
+  margin-bottom: 8px; transition: border-color .15s, background .25s, color .25s;
+}
+#spt-name:focus { border-color: var(--accent); }
+#spt-content {
+  width: 100%; padding: 8px 10px; font-size: 0.83rem; font-family: inherit;
+  border: 1px solid var(--input-border); border-radius: 6px;
+  background: var(--panel-bg); color: var(--text); outline: none;
+  resize: vertical; min-height: 80px;
+  transition: border-color .15s, background .25s, color .25s;
+}
+#spt-content:focus { border-color: var(--accent); }
+#spt-editor-actions {
+  display: flex; gap: 8px; justify-content: flex-end; margin-top: 10px;
+}
+#spt-editor-actions button {
+  padding: 7px 16px; border: none; border-radius: 6px;
+  font-size: 0.82rem; cursor: pointer; transition: background .15s;
+}
+#spt-discard { background: transparent; color: var(--muted); }
+#spt-discard:hover { background: rgba(0,0,0,.06); }
+#spt-save { background: var(--accent); color: #fff; }
+#spt-save:hover { background: var(--accent-hover); }
+#spt-new-btn {
+  margin: 12px 20px 16px; padding: 9px;
+  background: var(--accent); color: #fff; border: none;
+  border-radius: 8px; cursor: pointer; font-size: 0.82rem;
+  transition: background .15s; text-align: center;
+}
+#spt-new-btn:hover { background: var(--accent-hover); }
 
 /* Chat area */
 #chat-area {

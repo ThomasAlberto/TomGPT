@@ -725,6 +725,9 @@ async function exportConv() {
 }
 
 // ── System prompt ──────────────────────────────────────────────────────────
+let promptTemplates = [];
+let editingTemplateId = null;
+
 function toggleSP() {
   const body  = document.getElementById('sp-body');
   const arrow = document.getElementById('sp-arrow');
@@ -747,6 +750,138 @@ async function saveSP() {
   } catch (err) {
     console.error('Failed to save system prompt:', err);
     showToast('Failed to save system prompt.');
+  }
+}
+
+async function loadPromptTemplates() {
+  try {
+    const res = await fetch(`${API}/prompt-templates`);
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    promptTemplates = await res.json();
+    populateSpTemplateSelect();
+  } catch (err) {
+    console.error('Failed to load prompt templates:', err);
+  }
+}
+
+function populateSpTemplateSelect() {
+  const select = document.getElementById('sp-template-select');
+  if (!select) return;
+  const current = select.value;
+  let html = '<option value="">Custom (this conversation only)</option>';
+  promptTemplates.forEach(t => {
+    html += `<option value="${t.id}">${esc(t.name)}</option>`;
+  });
+  select.innerHTML = html;
+  if (current && promptTemplates.some(t => t.id === current)) select.value = current;
+}
+
+function onSpTemplateChange() {
+  const tid = document.getElementById('sp-template-select').value;
+  if (!tid) return;
+  const tpl = promptTemplates.find(t => t.id === tid);
+  if (tpl) document.getElementById('sp-input').value = tpl.content;
+}
+
+function openSpTemplateModal() {
+  renderSpTemplateList();
+  hideSpTemplateEditor();
+  document.getElementById('spt-overlay').classList.add('visible');
+}
+
+function closeSpTemplateModal() {
+  document.getElementById('spt-overlay').classList.remove('visible');
+  editingTemplateId = null;
+}
+
+function renderSpTemplateList() {
+  const el = document.getElementById('spt-list');
+  if (!promptTemplates.length) {
+    el.innerHTML = '<div class="spt-empty">No templates yet.</div>';
+    return;
+  }
+  el.innerHTML = promptTemplates.map(t => `
+    <div class="spt-item">
+      <span class="spt-item-name">${esc(t.name)}</span>
+      <div class="spt-item-actions">
+        <button class="spt-item-edit" onclick="startEditSpTemplate('${t.id}')">✎</button>
+        <button class="spt-item-del" onclick="deleteSpTemplate('${t.id}')">&#x2715;</button>
+      </div>
+    </div>
+  `).join('');
+}
+
+function showSpTemplateEditor(name, content) {
+  document.getElementById('spt-editor').style.display = 'block';
+  document.getElementById('spt-new-btn').style.display = 'none';
+  document.getElementById('spt-name').value = name || '';
+  document.getElementById('spt-content').value = content || '';
+  document.getElementById('spt-name').focus();
+}
+
+function hideSpTemplateEditor() {
+  document.getElementById('spt-editor').style.display = 'none';
+  document.getElementById('spt-new-btn').style.display = 'block';
+  editingTemplateId = null;
+}
+
+function startNewSpTemplate() {
+  editingTemplateId = null;
+  showSpTemplateEditor('', '');
+}
+
+function startEditSpTemplate(tid) {
+  const tpl = promptTemplates.find(t => t.id === tid);
+  if (!tpl) return;
+  editingTemplateId = tid;
+  showSpTemplateEditor(tpl.name, tpl.content);
+}
+
+function cancelSpTemplateEdit() {
+  hideSpTemplateEditor();
+}
+
+async function saveSpTemplate() {
+  const name = document.getElementById('spt-name').value.trim();
+  const content = document.getElementById('spt-content').value.trim();
+  if (!name) { showToast('Template name is required.'); return; }
+  if (!content) { showToast('Template content is required.'); return; }
+
+  try {
+    let res;
+    if (editingTemplateId) {
+      res = await fetch(`${API}/prompt-templates/${editingTemplateId}`, {
+        method: 'PUT', headers: h(), body: JSON.stringify({ name, content })
+      });
+    } else {
+      res = await fetch(`${API}/prompt-templates`, {
+        method: 'POST', headers: h(), body: JSON.stringify({ name, content })
+      });
+    }
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    await loadPromptTemplates();
+    hideSpTemplateEditor();
+    renderSpTemplateList();
+    showToast(editingTemplateId ? 'Template updated.' : 'Template created.');
+    editingTemplateId = null;
+  } catch (err) {
+    console.error('Failed to save template:', err);
+    showToast('Failed to save template.');
+  }
+}
+
+async function deleteSpTemplate(tid) {
+  const tpl = promptTemplates.find(t => t.id === tid);
+  if (!confirm(`Delete template "${tpl?.name || ''}"?`)) return;
+  try {
+    const res = await fetch(`${API}/prompt-templates/${tid}`, { method: 'DELETE' });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    await loadPromptTemplates();
+    renderSpTemplateList();
+    showToast('Template deleted.');
+  } catch (err) {
+    console.error('Failed to delete template:', err);
+    showToast('Failed to delete template.');
   }
 }
 
@@ -899,7 +1034,7 @@ function finalizeStreamingBubble(bubble, content) {
 
 // ── Init ───────────────────────────────────────────────────────────────────
 async function init() {
-  await Promise.all([loadModels(), loadList(), loadFolders()]);
+  await Promise.all([loadModels(), loadList(), loadFolders(), loadPromptTemplates()]);
   renderSidebar();
   initPricingTooltip();
 }
