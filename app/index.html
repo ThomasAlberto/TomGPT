@@ -45,6 +45,12 @@
           <option disabled selected>Loading models...</option>
         </select>
       </div>
+      <div id="mode-picker">
+        <select id="mode-select" onchange="onModeChange()">
+          <option value="standard">Standard</option>
+          <option value="pro">Pro</option>
+        </select>
+      </div>
       <button id="export-btn" onclick="exportConv()" title="Export to Markdown">Export</button>
     </div>
     <div id="sp-body">
@@ -55,7 +61,7 @@
         <button id="sp-template-edit-btn" onclick="openSpTemplateModal()" title="Manage templates">✎</button>
       </div>
       <textarea id="sp-input" placeholder="e.g. You are a concise assistant that always replies in bullet points."></textarea>
-      <button id="sp-save" onclick="saveSP()">Save</button>
+      <button id="sp-save" onclick="saveSP()">Apply</button>
     </div>
   </div>
 

@@ -120,6 +120,7 @@ async function loadModels() {
     });
     select.appendChild(group);
   }
+  updateModeSelect();
   } catch (err) {
     console.error('Failed to load models:', err);
     showToast('Failed to load models. Is the server running?');
@@ -228,9 +229,59 @@ async function onModelChange() {
       body: JSON.stringify({ model })
     });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    updateModeSelect();
   } catch (err) {
     console.error('Failed to update model:', err);
     showToast('Failed to update model.');
+  }
+}
+
+function updateModeSelect() {
+  const info = getModelInfo(getModel());
+  const select = document.getElementById('mode-select');
+  const previous = select.value;
+  let html = '<option value="standard">Standard</option>';
+  if (info?.thinking) {
+    html += '<option value="thinking">Thinking</option>';
+  }
+  html += '<option value="pro">Pro</option>';
+  select.innerHTML = html;
+  if (select.querySelector(`option[value="${previous}"]`)) {
+    select.value = previous;
+  } else {
+    select.value = 'standard';
+    // Sync to backend if mode was invalidated by model change
+    if (previous !== 'standard' && currentId) {
+      fetch(`${API}/conversations/${currentId}/mode`, {
+        method: 'PATCH', headers: h(),
+        body: JSON.stringify({ mode: 'standard', thinking_budget: 8000 })
+      }).catch(err => console.error('Failed to sync mode:', err));
+    }
+  }
+}
+
+async function onModeChange() {
+  if (!currentId) return;
+  const select = document.getElementById('mode-select');
+  const mode = select.value;
+  if (mode === 'thinking') {
+    if (!confirm('Thinking can multiply API costs by 5\u201310\u00d7, as thinking tokens are billed at the full output rate.\n\nContinue?')) {
+      select.value = 'standard'; return;
+    }
+  } else if (mode === 'pro') {
+    if (!confirm('Pro mode makes 3 API calls per message (\u22483\u00d7 cost).\n\nContinue?')) {
+      select.value = 'standard'; return;
+    }
+  }
+  try {
+    const res = await fetch(`${API}/conversations/${currentId}/mode`, {
+      method: 'PATCH', headers: h(),
+      body: JSON.stringify({ mode, thinking_budget: 8000 })
+    });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  } catch (err) {
+    console.error('Failed to update mode:', err);
+    showToast('Failed to update mode.');
   }
 }
 
@@ -651,6 +702,8 @@ async function selectConv(id) {
     const conv = await res.json();
     document.getElementById('sp-input').value = conv.system_prompt || '';
     if (conv.model) document.getElementById('model-select').value = conv.model;
+    updateModeSelect();
+    document.getElementById('mode-select').value = conv.mode || 'standard';
 
     const area = document.getElementById('chat-area');
     area.innerHTML = '';
@@ -659,7 +712,7 @@ async function selectConv(id) {
     } else {
       conv.messages.forEach(m => {
         const names = (m.files || []).map(f => f.filename);
-        addBubble(m.role, m.content, names);
+        addBubble(m.role, m.content, names, m.thinking, m.pro_initial, m.pro_critique);
       });
     }
     scrollDown();
@@ -913,7 +966,11 @@ async function send() {
   try {
     const res = await fetch(`${API}/chat/stream`, {
       method: 'POST', headers: h(),
-      body: JSON.stringify({ conversation_id: currentId, message: msg, model: getModel(), files: fileRefs }),
+      body: JSON.stringify({
+        conversation_id: currentId, message: msg, model: getModel(), files: fileRefs,
+        mode: document.getElementById('mode-select').value,
+        thinking_budget: 8000,
+      }),
       signal: currentAbortController.signal,
     });
 
@@ -939,7 +996,33 @@ async function send() {
         if (!part.startsWith('data: ')) continue;
         try {
           const data = JSON.parse(part.slice(6));
-          if (data.type === 'chunk') {
+          if (data.type === 'thinking_start') {
+            bubble._thinkingEl.style.display = '';
+            bubble._thinkingEl.open = true;
+          } else if (data.type === 'thinking_chunk') {
+            bubble._thinkingEl.querySelector('.thinking-content').textContent +=
+              data.content;
+            scrollDown();
+          } else if (data.type === 'thinking_end') {
+            bubble._thinkingEl.open = false;
+            bubble._thinkingEl.querySelector('summary').textContent = 'Thinking complete';
+          } else if (data.type === 'pro_status') {
+            bubble.innerHTML = `<span class="pro-status">${esc(data.message)}</span><span class="cursor">▊</span>`;
+            scrollDown();
+          } else if (data.type === 'pro_stage') {
+            bubble._proContainer.style.display = '';
+            const details = document.createElement('details');
+            details.className = 'pro-stage-block';
+            const summary = document.createElement('summary');
+            summary.textContent = data.stage === 'initial' ? 'Initial response' : 'Critique';
+            const content = document.createElement('div');
+            content.className = 'pro-stage-content';
+            content.innerHTML = marked.parse(data.content);
+            details.appendChild(summary);
+            details.appendChild(content);
+            bubble._proContainer.appendChild(details);
+            scrollDown();
+          } else if (data.type === 'chunk') {
             fullContent += data.content;
             updateStreamingBubble(bubble, fullContent);
           } else if (data.type === 'done') {
@@ -982,7 +1065,7 @@ function stopGeneration() {
   if (currentAbortController) currentAbortController.abort();
 }
 
-function addBubble(role, content, fileNames) {
+function addBubble(role, content, fileNames, thinking, proInitial, proCritique) {
   const area   = document.getElementById('chat-area');
   const wrap   = document.createElement('div');
   wrap.className = `msg ${role}`;
@@ -994,6 +1077,37 @@ function addBubble(role, content, fileNames) {
       `<span class="file-tag">${n.endsWith('.pdf') ? '📄' : '📝'} ${esc(n)}</span>`
     ).join('');
     wrap.appendChild(tags);
+  }
+
+  if (role === 'assistant' && thinking) {
+    const details = document.createElement('details');
+    details.className = 'thinking-block';
+    const summary = document.createElement('summary');
+    summary.textContent = 'Thinking';
+    const pre = document.createElement('pre');
+    pre.className = 'thinking-content';
+    pre.textContent = thinking;
+    details.appendChild(summary);
+    details.appendChild(pre);
+    wrap.appendChild(details);
+  }
+
+  if (role === 'assistant' && proInitial) {
+    const container = document.createElement('div');
+    container.className = 'pro-stages';
+    [['Initial response', proInitial], ['Critique', proCritique]].forEach(([label, text]) => {
+      const d = document.createElement('details');
+      d.className = 'pro-stage-block';
+      const s = document.createElement('summary');
+      s.textContent = label;
+      const c = document.createElement('div');
+      c.className = 'pro-stage-content';
+      c.innerHTML = marked.parse(text);
+      d.appendChild(s);
+      d.appendChild(c);
+      container.appendChild(d);
+    });
+    wrap.appendChild(container);
   }
 
   const bubble = document.createElement('div');
@@ -1009,9 +1123,24 @@ function addStreamingBubble() {
   const area = document.getElementById('chat-area');
   const wrap = document.createElement('div');
   wrap.className = 'msg assistant';
+
+  const thinkingDetails = document.createElement('details');
+  thinkingDetails.className = 'thinking-block';
+  thinkingDetails.style.display = 'none';
+  thinkingDetails.open = true;
+  thinkingDetails.innerHTML = '<summary>Thinking\u2026</summary><pre class="thinking-content"></pre>';
+  wrap.appendChild(thinkingDetails);
+
+  const proContainer = document.createElement('div');
+  proContainer.className = 'pro-stages';
+  proContainer.style.display = 'none';
+  wrap.appendChild(proContainer);
+
   const bubble = document.createElement('div');
   bubble.className = 'bubble streaming';
   bubble._content = '';
+  bubble._thinkingEl = thinkingDetails;
+  bubble._proContainer = proContainer;
   bubble.innerHTML = '<span class="cursor">▊</span>';
   wrap.appendChild(bubble);
   area.appendChild(wrap);

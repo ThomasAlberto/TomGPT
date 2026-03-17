@@ -88,6 +88,13 @@ class ChatMessage(BaseModel):
     message: str
     model: str = "claude-sonnet-4-6"
     files: list[FileRef] = []
+    mode: str = "standard"
+    thinking_budget: int = 8000
+
+
+class ModeUpdate(BaseModel):
+    mode: str = "standard"
+    thinking_budget: int = 8000
 
 
 class SystemPromptUpdate(BaseModel):
@@ -118,10 +125,10 @@ class FolderMove(BaseModel):
 
 AVAILABLE_MODELS = {
     # Anthropic
-    "claude-opus-4-6":           {"name": "Claude Opus 4.6",   "provider": "anthropic", "maker": "Anthropic", "input_price": 5.00,  "output_price": 25.00},
-    "claude-sonnet-4-6":         {"name": "Claude Sonnet 4.6", "provider": "anthropic", "maker": "Anthropic", "input_price": 3.00,  "output_price": 15.00},
+    "claude-opus-4-6":           {"name": "Claude Opus 4.6",   "provider": "anthropic", "maker": "Anthropic", "input_price": 5.00,  "output_price": 25.00, "thinking": True},
+    "claude-sonnet-4-6":         {"name": "Claude Sonnet 4.6", "provider": "anthropic", "maker": "Anthropic", "input_price": 3.00,  "output_price": 15.00, "thinking": True},
     "claude-haiku-4-5-20251001": {"name": "Claude Haiku 4.5",  "provider": "anthropic", "maker": "Anthropic", "input_price": 1.00,  "output_price": 5.00},
-    "claude-opus-4-20250514":    {"name": "Claude Opus 4",     "provider": "anthropic", "maker": "Anthropic", "input_price": 15.00, "output_price": 75.00},
+    # "claude-opus-4-20250514":    {"name": "Claude Opus 4",     "provider": "anthropic", "maker": "Anthropic", "input_price": 15.00, "output_price": 75.00},
     "claude-sonnet-4-20250514":  {"name": "Claude Sonnet 4",   "provider": "anthropic", "maker": "Anthropic", "input_price": 3.00,  "output_price": 15.00},
     "claude-haiku-3-5-20241022": {"name": "Claude 3.5 Haiku",  "provider": "anthropic", "maker": "Anthropic", "input_price": 0.80,  "output_price": 4.00},
     # OpenAI
@@ -193,6 +200,8 @@ async def create_conversation(body: NewConversation):
         "system_prompt": body.system_prompt,
         "model": "claude-sonnet-4-6",
         "folder_id": folder_id,
+        "mode": "standard",
+        "thinking_budget": 8000,
         "messages": [],
         "created_at": datetime.now(timezone.utc).isoformat(),
     }
@@ -212,6 +221,8 @@ async def get_conversation(conversation_id: str):
         "system_prompt": conv.get("system_prompt", ""),
         "model": conv.get("model", "claude-sonnet-4-6"),
         "folder_id": conv.get("folder_id"),
+        "mode": conv.get("mode") or ("thinking" if conv.get("thinking_enabled") else "standard"),
+        "thinking_budget": conv.get("thinking_budget", 8000),
         "messages": conv.get("messages", []),
         "created_at": conv.get("created_at", ""),
     }
@@ -243,6 +254,18 @@ async def update_model(conversation_id: str, body: ModelUpdate):
     if not conv:
         raise HTTPException(status_code=404, detail="Conversation not found")
     conv["model"] = body.model
+    save_memory(memory)
+    return {"ok": True}
+
+
+@app.patch("/conversations/{conversation_id}/mode")
+async def update_mode(conversation_id: str, body: ModeUpdate):
+    memory = load_memory()
+    conv = memory["conversations"].get(conversation_id)
+    if not conv:
+        raise HTTPException(status_code=404, detail="Conversation not found")
+    conv["mode"] = body.mode
+    conv["thinking_budget"] = body.thinking_budget
     save_memory(memory)
     return {"ok": True}
 
@@ -547,7 +570,7 @@ def generate_title(first_user_message: str, provider: str = "anthropic") -> str:
         )
         return resp.choices[0].message.content.strip()
     resp = anthropic_client.messages.create(
-        model="claude-sonnet-4-6",
+        model="claude-haiku-4-5-20251001",
         max_tokens=30,
         timeout=30.0,
         messages=[{"role": "user", "content": TITLE_PROMPT + first_user_message}],
@@ -568,7 +591,66 @@ def _build_system_prompt(model: str, user_system_prompt: str) -> str:
     return f"{identity} You are a helpful assistant."
 
 
-def _call_anthropic(model: str, system: str, messages: list[dict]) -> str:
+PRO_CRITIQUE_PROMPT = (
+    "You are a critical reviewer. Analyse the response for: "
+    "1) Accuracy — factual errors or unsupported claims, "
+    "2) Completeness — important missing aspects, "
+    "3) Clarity — confusing or poorly explained parts, "
+    "4) Relevance — parts that don't address the question. "
+    "Be specific and actionable. Format as a concise bullet list."
+)
+
+PRO_REFINE_INSTRUCTION = (
+    "A reviewer identified these issues with your response:\n\n"
+    "{critique}\n\n"
+    "Please provide an improved response addressing these issues. "
+    "Do not mention the review or that this is a revision."
+)
+
+
+def _pro_stream(model: str, system: str, messages: list[dict],
+                provider: str, user_message: str):
+    """Pro mode: generate → critique → refine (final step streamed)."""
+
+    yield {"type": "pro_status", "message": "Generating initial response\u2026"}
+
+    # Step 1 — initial response (non-streaming)
+    if provider == "anthropic":
+        initial, _ = _call_anthropic(model, system, messages)
+    else:
+        initial = _call_openai(model, system, messages)
+
+    yield {"type": "pro_stage", "stage": "initial", "content": initial}
+    yield {"type": "pro_status", "message": "Reviewing response\u2026"}
+
+    # Step 2 — critique with a cheap model (non-streaming)
+    critique_model = "claude-haiku-4-5-20251001" if provider == "anthropic" else "gpt-4.1-mini"
+    critique_msgs = [
+        {"role": "user",
+         "content": f"Question: {user_message}\n\nResponse to review:\n{initial}"},
+    ]
+    if AVAILABLE_MODELS[critique_model]["provider"] == "anthropic":
+        critique, _ = _call_anthropic(critique_model, PRO_CRITIQUE_PROMPT, critique_msgs)
+    else:
+        critique = _call_openai(critique_model, PRO_CRITIQUE_PROMPT, critique_msgs)
+
+    yield {"type": "pro_stage", "stage": "critique", "content": critique}
+    yield {"type": "pro_status", "message": "Refining response\u2026"}
+
+    # Step 3 — refine with streaming (full conversation context)
+    refine_msgs = messages + [
+        {"role": "assistant", "content": initial},
+        {"role": "user", "content": PRO_REFINE_INSTRUCTION.format(critique=critique)},
+    ]
+    if provider == "anthropic":
+        yield from _stream_anthropic(model, system, refine_msgs)
+    else:
+        for text in _stream_openai(model, system, refine_msgs):
+            yield text
+
+
+def _build_anthropic_messages(messages: list[dict]) -> list[dict]:
+    """Build Anthropic API messages, preserving thinking blocks in history."""
     api_messages = []
     for m in messages:
         if m["role"] == "user" and m.get("files"):
@@ -576,17 +658,43 @@ def _call_anthropic(model: str, system: str, messages: list[dict]) -> str:
                 "role": "user",
                 "content": build_anthropic_blocks(m["content"], m["files"]),
             })
+        elif m["role"] == "assistant" and m.get("thinking"):
+            api_messages.append({
+                "role": "assistant",
+                "content": [
+                    {"type": "thinking", "thinking": m["thinking"]},
+                    {"type": "text", "text": m["content"]},
+                ],
+            })
         else:
             api_messages.append({"role": m["role"], "content": m["content"]})
+    return api_messages
 
-    response = anthropic_client.messages.create(
+
+def _call_anthropic(model: str, system: str, messages: list[dict],
+                    thinking_enabled: bool = False, thinking_budget: int = 8000) -> tuple[str, str | None]:
+    api_messages = _build_anthropic_messages(messages)
+
+    kwargs: dict = dict(
         model=model,
-        max_tokens=4096,
+        max_tokens=16000 if thinking_enabled else 4096,
         system=system,
         messages=api_messages,
         timeout=120.0,
     )
-    return response.content[0].text
+    if thinking_enabled:
+        kwargs["thinking"] = {"type": "enabled", "budget_tokens": thinking_budget}
+
+    response = anthropic_client.messages.create(**kwargs)
+
+    thinking_text = None
+    reply_text = ""
+    for block in response.content:
+        if block.type == "thinking":
+            thinking_text = block.thinking
+        elif block.type == "text":
+            reply_text = block.text
+    return reply_text, thinking_text
 
 
 OPENAI_REASONING_MODELS = {"o3", "o3-mini", "o4-mini"}
@@ -613,25 +721,39 @@ def _call_openai(model: str, system: str, messages: list[dict]) -> str:
     return response.choices[0].message.content
 
 
-def _stream_anthropic(model: str, system: str, messages: list[dict]):
-    api_messages = []
-    for m in messages:
-        if m["role"] == "user" and m.get("files"):
-            api_messages.append({
-                "role": "user",
-                "content": build_anthropic_blocks(m["content"], m["files"]),
-            })
-        else:
-            api_messages.append({"role": m["role"], "content": m["content"]})
+def _stream_anthropic(model: str, system: str, messages: list[dict],
+                      thinking_enabled: bool = False, thinking_budget: int = 8000):
+    api_messages = _build_anthropic_messages(messages)
 
-    with anthropic_client.messages.stream(
+    kwargs: dict = dict(
         model=model,
-        max_tokens=4096,
+        max_tokens=16000 if thinking_enabled else 4096,
         system=system,
         messages=api_messages,
-    ) as stream:
-        for text in stream.text_stream:
-            yield text
+    )
+    if thinking_enabled:
+        kwargs["thinking"] = {"type": "enabled", "budget_tokens": thinking_budget}
+
+    with anthropic_client.messages.stream(**kwargs) as stream:
+        if not thinking_enabled:
+            for text in stream.text_stream:
+                yield {"type": "chunk", "content": text}
+        else:
+            current_block_type = None
+            for event in stream:
+                if event.type == "content_block_start":
+                    current_block_type = event.content_block.type
+                    if current_block_type == "thinking":
+                        yield {"type": "thinking_start"}
+                elif event.type == "content_block_delta":
+                    if event.delta.type == "thinking_delta":
+                        yield {"type": "thinking_chunk", "content": event.delta.thinking}
+                    elif event.delta.type == "text_delta":
+                        yield {"type": "chunk", "content": event.delta.text}
+                elif event.type == "content_block_stop":
+                    if current_block_type == "thinking":
+                        yield {"type": "thinking_end"}
+                    current_block_type = None
 
 
 def _stream_openai(model: str, system: str, messages: list[dict]):
@@ -656,6 +778,30 @@ def _stream_openai(model: str, system: str, messages: list[dict]):
         delta = chunk.choices[0].delta
         if delta and delta.content:
             yield delta.content
+
+
+def _inject_rag_context(system_prompt: str, folder_id: str | None, query: str, memory: dict) -> str:
+    """Append RAG knowledge base context to the system prompt if available."""
+    if not folder_id:
+        return system_prompt
+    chain = get_folder_chain(folder_id, memory)
+    try:
+        rag_results = rag.search_folder_chain(chain, query, top_k=5)
+    except Exception as e:
+        logger.warning("RAG search failed: %s", e)
+        return system_prompt
+    if not rag_results:
+        return system_prompt
+    chunks = [
+        f'<document source="{r["source"]}" relevance="{r["score"]:.2f}">\n{r["content"]}\n</document>'
+        for r in rag_results
+    ]
+    rag_block = "<knowledge_base>\n" + "\n".join(chunks) + "\n</knowledge_base>"
+    logger.info("RAG: injected %d chunks from %d folders", len(rag_results), len(chain))
+    return system_prompt + (
+        "\n\nYou have access to a knowledge base. Use it to inform your answers when relevant. "
+        "Cite sources when you use information from the knowledge base.\n\n" + rag_block
+    )
 
 
 @app.post("/chat")
@@ -683,34 +829,55 @@ async def chat(body: ChatMessage):
 
     full_system = _build_system_prompt(model, conv.get("system_prompt", ""))
     provider = AVAILABLE_MODELS[model]["provider"]
-
-    folder_id = conv.get("folder_id")
-    if folder_id:
-        chain = get_folder_chain(folder_id, memory)
-        try:
-            rag_results = rag.search_folder_chain(chain, body.message, top_k=5)
-        except Exception as e:
-            logger.warning("RAG search failed: %s", e)
-            rag_results = []
-        if rag_results:
-            chunks = []
-            for r in rag_results:
-                chunks.append(f'<document source="{r["source"]}" relevance="{r["score"]:.2f}">\n{r["content"]}\n</document>')
-            rag_block = "<knowledge_base>\n" + "\n".join(chunks) + "\n</knowledge_base>"
-            full_system += (
-                "\n\nYou have access to a knowledge base. Use it to inform your answers when relevant. "
-                "Cite sources when you use information from the knowledge base.\n\n" + rag_block
-            )
-            logger.info("RAG: injected %d chunks from %d folders", len(rag_results), len(chain))
+    full_system = _inject_rag_context(full_system, conv.get("folder_id"), body.message, memory)
 
     logger.info("Chat: model=%s, provider=%s, conv=%s, files=%d", model, provider, body.conversation_id[:8], len(file_refs))
 
-    if provider == "anthropic":
-        reply = _call_anthropic(model, full_system, conv["messages"])
-    else:
-        reply = _call_openai(model, full_system, conv["messages"])
+    mode = body.mode
+    if mode == "thinking" and not AVAILABLE_MODELS[model].get("thinking"):
+        logger.warning("Mode 'thinking' not supported by %s, falling back to standard", model)
+        mode = "standard"
+    thinking = None
+    pro_initial = None
+    pro_critique = None
 
-    conv["messages"].append({"role": "assistant", "content": reply})
+    if mode == "pro":
+        if provider == "anthropic":
+            initial, _ = _call_anthropic(model, full_system, conv["messages"])
+        else:
+            initial = _call_openai(model, full_system, conv["messages"])
+        crit_model = "claude-haiku-4-5-20251001" if provider == "anthropic" else "gpt-4.1-mini"
+        crit_msgs = [{"role": "user", "content": f"Question: {body.message}\n\nResponse to review:\n{initial}"}]
+        if AVAILABLE_MODELS[crit_model]["provider"] == "anthropic":
+            critique, _ = _call_anthropic(crit_model, PRO_CRITIQUE_PROMPT, crit_msgs)
+        else:
+            critique = _call_openai(crit_model, PRO_CRITIQUE_PROMPT, crit_msgs)
+        refine_msgs = conv["messages"] + [
+            {"role": "assistant", "content": initial},
+            {"role": "user", "content": PRO_REFINE_INSTRUCTION.format(critique=critique)},
+        ]
+        if provider == "anthropic":
+            reply, _ = _call_anthropic(model, full_system, refine_msgs)
+        else:
+            reply = _call_openai(model, full_system, refine_msgs)
+        pro_initial = initial
+        pro_critique = critique
+    elif mode == "thinking" and provider == "anthropic":
+        reply, thinking = _call_anthropic(model, full_system, conv["messages"],
+                                          thinking_enabled=True, thinking_budget=body.thinking_budget)
+    else:
+        if provider == "anthropic":
+            reply, _ = _call_anthropic(model, full_system, conv["messages"])
+        else:
+            reply = _call_openai(model, full_system, conv["messages"])
+
+    assistant_msg: dict = {"role": "assistant", "content": reply}
+    if thinking:
+        assistant_msg["thinking"] = thinking
+    if pro_initial:
+        assistant_msg["pro_initial"] = pro_initial
+        assistant_msg["pro_critique"] = pro_critique
+    conv["messages"].append(assistant_msg)
 
     if len(conv["messages"]) == 2 and conv.get("title") == "New Conversation":
         try:
@@ -749,46 +916,61 @@ async def chat_stream(body: ChatMessage):
 
     full_system = _build_system_prompt(model, conv.get("system_prompt", ""))
     provider = AVAILABLE_MODELS[model]["provider"]
-
-    folder_id = conv.get("folder_id")
-    if folder_id:
-        chain = get_folder_chain(folder_id, memory)
-        try:
-            rag_results = rag.search_folder_chain(chain, body.message, top_k=5)
-        except Exception as e:
-            logger.warning("RAG search failed: %s", e)
-            rag_results = []
-        if rag_results:
-            chunks = []
-            for r in rag_results:
-                chunks.append(f'<document source="{r["source"]}" relevance="{r["score"]:.2f}">\n{r["content"]}\n</document>')
-            rag_block = "<knowledge_base>\n" + "\n".join(chunks) + "\n</knowledge_base>"
-            full_system += (
-                "\n\nYou have access to a knowledge base. Use it to inform your answers when relevant. "
-                "Cite sources when you use information from the knowledge base.\n\n" + rag_block
-            )
-            logger.info("RAG: injected %d chunks from %d folders", len(rag_results), len(chain))
+    full_system = _inject_rag_context(full_system, conv.get("folder_id"), body.message, memory)
 
     logger.info("Chat stream: model=%s, provider=%s, conv=%s, files=%d", model, provider, body.conversation_id[:8], len(file_refs))
 
+    validated_mode = body.mode
+    if validated_mode == "thinking" and not AVAILABLE_MODELS[model].get("thinking"):
+        logger.warning("Mode 'thinking' not supported by %s, falling back to standard", model)
+        validated_mode = "standard"
+
     def event_generator():
         full_response = []
+        thinking_parts = []
+        pro_initial = ""
+        pro_critique = ""
+        assistant_saved = False
         try:
-            if provider == "anthropic":
+            mode = validated_mode
+            if mode == "pro":
+                stream = _pro_stream(model, full_system, conv["messages"], provider, body.message)
+            elif mode == "thinking" and provider == "anthropic":
+                stream = _stream_anthropic(model, full_system, conv["messages"],
+                                           thinking_enabled=True, thinking_budget=body.thinking_budget)
+            elif provider == "anthropic":
                 stream = _stream_anthropic(model, full_system, conv["messages"])
             else:
                 stream = _stream_openai(model, full_system, conv["messages"])
 
             for chunk in stream:
-                full_response.append(chunk)
-                yield f"data: {json.dumps({'type': 'chunk', 'content': chunk})}\n\n"
+                if isinstance(chunk, str):
+                    full_response.append(chunk)
+                    yield f"data: {json.dumps({'type': 'chunk', 'content': chunk})}\n\n"
+                else:
+                    if chunk["type"] == "chunk":
+                        full_response.append(chunk["content"])
+                    elif chunk["type"] == "thinking_chunk":
+                        thinking_parts.append(chunk["content"])
+                    elif chunk["type"] == "pro_stage":
+                        if chunk["stage"] == "initial":
+                            pro_initial = chunk["content"]
+                        elif chunk["stage"] == "critique":
+                            pro_critique = chunk["content"]
+                    yield f"data: {json.dumps(chunk)}\n\n"
 
             reply = "".join(full_response)
 
             memory2 = load_memory()
             conv2 = memory2["conversations"].get(body.conversation_id)
             if conv2:
-                conv2["messages"].append({"role": "assistant", "content": reply})
+                assistant_msg: dict = {"role": "assistant", "content": reply}
+                if thinking_parts:
+                    assistant_msg["thinking"] = "".join(thinking_parts)
+                if pro_initial:
+                    assistant_msg["pro_initial"] = pro_initial
+                    assistant_msg["pro_critique"] = pro_critique
+                conv2["messages"].append(assistant_msg)
                 if len(conv2["messages"]) == 2 and conv2.get("title") == "New Conversation":
                     try:
                         conv2["title"] = generate_title(body.message, provider)
@@ -796,6 +978,7 @@ async def chat_stream(body: ChatMessage):
                         logger.warning("Title generation failed: %s", e)
                         conv2["title"] = body.message[:40]
                 save_memory(memory2)
+                assistant_saved = True
                 yield f"data: {json.dumps({'type': 'done', 'title': conv2['title']})}\n\n"
             else:
                 yield f"data: {json.dumps({'type': 'done', 'title': 'New Conversation'})}\n\n"
@@ -803,6 +986,17 @@ async def chat_stream(body: ChatMessage):
         except Exception as e:
             logger.error("Stream error: %s", e)
             yield f"data: {json.dumps({'type': 'error', 'message': str(e)})}\n\n"
+        finally:
+            if not assistant_saved:
+                try:
+                    mem = load_memory()
+                    c = mem["conversations"].get(body.conversation_id)
+                    if c and c["messages"] and c["messages"][-1]["role"] == "user":
+                        c["messages"].pop()
+                        save_memory(mem)
+                        logger.info("Cleaned up orphaned user message for conv %s", body.conversation_id[:8])
+                except Exception:
+                    pass
 
     return StreamingResponse(
         event_generator(),
