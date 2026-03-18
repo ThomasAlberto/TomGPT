@@ -4,6 +4,7 @@ import logging
 import os
 import shutil
 import tempfile
+import time
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
@@ -616,7 +617,7 @@ def _pro_stream(model: str, system: str, messages: list[dict],
 
     # Step 1 — initial response (non-streaming)
     if provider == "anthropic":
-        initial, _ = _call_anthropic(model, system, messages)
+        initial, _, _ = _call_anthropic(model, system, messages)
     else:
         initial = _call_openai(model, system, messages)
 
@@ -630,7 +631,7 @@ def _pro_stream(model: str, system: str, messages: list[dict],
          "content": f"Question: {user_message}\n\nResponse to review:\n{initial}"},
     ]
     if AVAILABLE_MODELS[critique_model]["provider"] == "anthropic":
-        critique, _ = _call_anthropic(critique_model, PRO_CRITIQUE_PROMPT, critique_msgs)
+        critique, _, _ = _call_anthropic(critique_model, PRO_CRITIQUE_PROMPT, critique_msgs)
     else:
         critique = _call_openai(critique_model, PRO_CRITIQUE_PROMPT, critique_msgs)
 
@@ -658,11 +659,12 @@ def _build_anthropic_messages(messages: list[dict]) -> list[dict]:
                 "role": "user",
                 "content": build_anthropic_blocks(m["content"], m["files"]),
             })
-        elif m["role"] == "assistant" and m.get("thinking"):
+        elif m["role"] == "assistant" and m.get("thinking") and m.get("thinking_signature"):
             api_messages.append({
                 "role": "assistant",
                 "content": [
-                    {"type": "thinking", "thinking": m["thinking"]},
+                    {"type": "thinking", "thinking": m["thinking"],
+                     "signature": m["thinking_signature"]},
                     {"type": "text", "text": m["content"]},
                 ],
             })
@@ -672,12 +674,12 @@ def _build_anthropic_messages(messages: list[dict]) -> list[dict]:
 
 
 def _call_anthropic(model: str, system: str, messages: list[dict],
-                    thinking_enabled: bool = False, thinking_budget: int = 8000) -> tuple[str, str | None]:
+                    thinking_enabled: bool = False, thinking_budget: int = 8000) -> tuple[str, str | None, str | None]:
     api_messages = _build_anthropic_messages(messages)
 
     kwargs: dict = dict(
         model=model,
-        max_tokens=16000 if thinking_enabled else 4096,
+        max_tokens=16000 if thinking_enabled else 8192,
         system=system,
         messages=api_messages,
         timeout=120.0,
@@ -685,19 +687,35 @@ def _call_anthropic(model: str, system: str, messages: list[dict],
     if thinking_enabled:
         kwargs["thinking"] = {"type": "enabled", "budget_tokens": thinking_budget}
 
-    response = anthropic_client.messages.create(**kwargs)
+    for attempt in range(_MAX_RETRIES + 1):
+        try:
+            response = anthropic_client.messages.create(**kwargs)
+            break
+        except anthropic.APIStatusError as e:
+            if e.status_code in _RETRYABLE_STATUSES and attempt < _MAX_RETRIES:
+                wait = 2 ** attempt
+                logger.warning("Anthropic API error %d, retrying in %ds (%d/%d)",
+                               e.status_code, wait, attempt + 1, _MAX_RETRIES)
+                time.sleep(wait)
+            else:
+                raise
 
     thinking_text = None
+    thinking_signature = None
     reply_text = ""
     for block in response.content:
         if block.type == "thinking":
             thinking_text = block.thinking
+            thinking_signature = getattr(block, "signature", None)
         elif block.type == "text":
             reply_text = block.text
-    return reply_text, thinking_text
+    return reply_text, thinking_text, thinking_signature
 
 
 OPENAI_REASONING_MODELS = {"o3", "o3-mini", "o4-mini"}
+
+_RETRYABLE_STATUSES = {429, 500, 529}
+_MAX_RETRIES = 3
 
 
 def _call_openai(model: str, system: str, messages: list[dict]) -> str:
@@ -713,12 +731,22 @@ def _call_openai(model: str, system: str, messages: list[dict]) -> str:
 
     kwargs = {"model": model, "messages": api_messages, "timeout": 120.0}
     if model in OPENAI_REASONING_MODELS:
-        kwargs["max_completion_tokens"] = 4096
+        kwargs["max_completion_tokens"] = 8192
     else:
-        kwargs["max_tokens"] = 4096
+        kwargs["max_tokens"] = 8192
 
-    response = openai_client.chat.completions.create(**kwargs)
-    return response.choices[0].message.content
+    for attempt in range(_MAX_RETRIES + 1):
+        try:
+            response = openai_client.chat.completions.create(**kwargs)
+            return response.choices[0].message.content
+        except openai.APIStatusError as e:
+            if e.status_code in _RETRYABLE_STATUSES and attempt < _MAX_RETRIES:
+                wait = 2 ** attempt
+                logger.warning("OpenAI API error %d, retrying in %ds (%d/%d)",
+                               e.status_code, wait, attempt + 1, _MAX_RETRIES)
+                time.sleep(wait)
+            else:
+                raise
 
 
 def _stream_anthropic(model: str, system: str, messages: list[dict],
@@ -727,7 +755,7 @@ def _stream_anthropic(model: str, system: str, messages: list[dict],
 
     kwargs: dict = dict(
         model=model,
-        max_tokens=16000 if thinking_enabled else 4096,
+        max_tokens=16000 if thinking_enabled else 8192,
         system=system,
         messages=api_messages,
     )
@@ -740,6 +768,7 @@ def _stream_anthropic(model: str, system: str, messages: list[dict],
                 yield {"type": "chunk", "content": text}
         else:
             current_block_type = None
+            current_signature = None
             for event in stream:
                 if event.type == "content_block_start":
                     current_block_type = event.content_block.type
@@ -748,11 +777,14 @@ def _stream_anthropic(model: str, system: str, messages: list[dict],
                 elif event.type == "content_block_delta":
                     if event.delta.type == "thinking_delta":
                         yield {"type": "thinking_chunk", "content": event.delta.thinking}
+                    elif event.delta.type == "signature_delta":
+                        current_signature = event.delta.signature
                     elif event.delta.type == "text_delta":
                         yield {"type": "chunk", "content": event.delta.text}
                 elif event.type == "content_block_stop":
                     if current_block_type == "thinking":
-                        yield {"type": "thinking_end"}
+                        yield {"type": "thinking_end", "signature": current_signature}
+                        current_signature = None
                     current_block_type = None
 
 
@@ -769,9 +801,9 @@ def _stream_openai(model: str, system: str, messages: list[dict]):
 
     kwargs = {"model": model, "messages": api_messages, "stream": True}
     if model in OPENAI_REASONING_MODELS:
-        kwargs["max_completion_tokens"] = 4096
+        kwargs["max_completion_tokens"] = 8192
     else:
-        kwargs["max_tokens"] = 4096
+        kwargs["max_tokens"] = 8192
 
     response = openai_client.chat.completions.create(**kwargs)
     for chunk in response:
@@ -838,18 +870,19 @@ async def chat(body: ChatMessage):
         logger.warning("Mode 'thinking' not supported by %s, falling back to standard", model)
         mode = "standard"
     thinking = None
+    thinking_sig = None
     pro_initial = None
     pro_critique = None
 
     if mode == "pro":
         if provider == "anthropic":
-            initial, _ = _call_anthropic(model, full_system, conv["messages"])
+            initial, _, _ = _call_anthropic(model, full_system, conv["messages"])
         else:
             initial = _call_openai(model, full_system, conv["messages"])
         crit_model = "claude-haiku-4-5-20251001" if provider == "anthropic" else "gpt-4.1-mini"
         crit_msgs = [{"role": "user", "content": f"Question: {body.message}\n\nResponse to review:\n{initial}"}]
         if AVAILABLE_MODELS[crit_model]["provider"] == "anthropic":
-            critique, _ = _call_anthropic(crit_model, PRO_CRITIQUE_PROMPT, crit_msgs)
+            critique, _, _ = _call_anthropic(crit_model, PRO_CRITIQUE_PROMPT, crit_msgs)
         else:
             critique = _call_openai(crit_model, PRO_CRITIQUE_PROMPT, crit_msgs)
         refine_msgs = conv["messages"] + [
@@ -857,23 +890,25 @@ async def chat(body: ChatMessage):
             {"role": "user", "content": PRO_REFINE_INSTRUCTION.format(critique=critique)},
         ]
         if provider == "anthropic":
-            reply, _ = _call_anthropic(model, full_system, refine_msgs)
+            reply, _, _ = _call_anthropic(model, full_system, refine_msgs)
         else:
             reply = _call_openai(model, full_system, refine_msgs)
         pro_initial = initial
         pro_critique = critique
     elif mode == "thinking" and provider == "anthropic":
-        reply, thinking = _call_anthropic(model, full_system, conv["messages"],
-                                          thinking_enabled=True, thinking_budget=body.thinking_budget)
+        reply, thinking, thinking_sig = _call_anthropic(model, full_system, conv["messages"],
+                                                        thinking_enabled=True, thinking_budget=body.thinking_budget)
     else:
         if provider == "anthropic":
-            reply, _ = _call_anthropic(model, full_system, conv["messages"])
+            reply, _, _ = _call_anthropic(model, full_system, conv["messages"])
         else:
             reply = _call_openai(model, full_system, conv["messages"])
 
     assistant_msg: dict = {"role": "assistant", "content": reply}
     if thinking:
         assistant_msg["thinking"] = thinking
+        if thinking_sig:
+            assistant_msg["thinking_signature"] = thinking_sig
     if pro_initial:
         assistant_msg["pro_initial"] = pro_initial
         assistant_msg["pro_critique"] = pro_critique
@@ -928,6 +963,7 @@ async def chat_stream(body: ChatMessage):
     def event_generator():
         full_response = []
         thinking_parts = []
+        thinking_signature = None
         pro_initial = ""
         pro_critique = ""
         assistant_saved = False
@@ -952,6 +988,8 @@ async def chat_stream(body: ChatMessage):
                         full_response.append(chunk["content"])
                     elif chunk["type"] == "thinking_chunk":
                         thinking_parts.append(chunk["content"])
+                    elif chunk["type"] == "thinking_end":
+                        thinking_signature = chunk.get("signature")
                     elif chunk["type"] == "pro_stage":
                         if chunk["stage"] == "initial":
                             pro_initial = chunk["content"]
@@ -967,6 +1005,8 @@ async def chat_stream(body: ChatMessage):
                 assistant_msg: dict = {"role": "assistant", "content": reply}
                 if thinking_parts:
                     assistant_msg["thinking"] = "".join(thinking_parts)
+                    if thinking_signature:
+                        assistant_msg["thinking_signature"] = thinking_signature
                 if pro_initial:
                     assistant_msg["pro_initial"] = pro_initial
                     assistant_msg["pro_critique"] = pro_critique
