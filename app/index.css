@@ -338,8 +338,14 @@ body {
   transition: background .25s;
 }
 #top-controls {
-  display: flex; align-items: center; justify-content: space-between;
+  display: flex; align-items: center; gap: 4px;
 }
+.top-group {
+  display: flex; align-items: center; gap: 4px;
+  padding: 0 6px;
+  border-left: 1px solid var(--panel-border);
+}
+.top-group:last-child { margin-left: auto; }
 #sp-toggle {
   display: flex; align-items: center; gap: 8px;
   padding: 9px 16px; font-size: 0.82rem; color: var(--muted);
@@ -348,7 +354,7 @@ body {
 #sp-toggle:hover { background: var(--sp-hover); }
 #model-picker {
   display: flex; align-items: center; gap: 8px;
-  padding: 4px 16px; font-size: 0.82rem; color: var(--muted);
+  padding: 4px 6px; font-size: 0.82rem; color: var(--muted);
 }
 #model-picker label { white-space: nowrap; }
 #model-select {
@@ -365,6 +371,92 @@ body {
   transition: border-color .15s, color .15s;
 }
 #export-btn:hover { border-color: var(--accent); color: var(--accent); }
+#audio-btn {
+  padding: 5px 12px; font-size: 0.78rem; font-family: inherit;
+  background: transparent; color: var(--muted); border: 1px solid var(--input-border);
+  border-radius: 6px; cursor: pointer; white-space: nowrap;
+  transition: border-color .15s, color .15s;
+}
+#audio-btn:hover { border-color: var(--accent); color: var(--accent); }
+#audio-btn:disabled { opacity: .45; cursor: not-allowed; }
+
+/* Audio export modal */
+#audio-overlay {
+  display: none; position: fixed; inset: 0; z-index: 500;
+  background: rgba(0,0,0,.45); align-items: center; justify-content: center;
+}
+#audio-overlay.visible { display: flex; }
+#audio-modal {
+  background: var(--panel-bg); color: var(--text);
+  border-radius: 14px; width: 380px; padding: 0;
+  box-shadow: 0 8px 40px rgba(0,0,0,.3);
+  overflow: hidden; transition: background .25s, color .25s;
+}
+#audio-header {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 16px 20px; border-bottom: 1px solid var(--panel-border);
+}
+#audio-title { font-weight: 600; font-size: 0.95rem; }
+#audio-close {
+  background: none; border: none; color: var(--muted);
+  cursor: pointer; font-size: 1rem; padding: 2px 6px;
+  transition: color .15s;
+}
+#audio-close:hover { color: #ff6b6b; }
+#audio-body { padding: 16px 20px; }
+.audio-voice-row {
+  display: flex; align-items: center; justify-content: space-between;
+  margin-bottom: 12px;
+}
+.audio-voice-row label {
+  font-size: 0.85rem; color: var(--text); white-space: nowrap;
+}
+.audio-voice-pick {
+  display: flex; align-items: center; gap: 6px;
+}
+.audio-voice-pick select {
+  padding: 6px 10px; font-size: 0.82rem; font-family: inherit;
+  border: 1px solid var(--input-border); border-radius: 6px;
+  background: var(--panel-bg); color: var(--text); outline: none;
+  cursor: pointer; transition: border-color .15s;
+  min-width: 120px;
+}
+.audio-voice-pick select:focus { border-color: var(--accent); }
+.audio-preview-btn {
+  background: none; border: 1px solid var(--input-border); border-radius: 6px;
+  color: var(--muted); cursor: pointer; font-size: 0.82rem;
+  padding: 5px 8px; transition: border-color .15s, color .15s;
+  line-height: 1;
+}
+.audio-preview-btn:hover { border-color: var(--accent); color: var(--accent); }
+.audio-preview-btn:disabled { opacity: .45; cursor: not-allowed; }
+#audio-mode-tabs {
+  display: flex; gap: 4px; margin-bottom: 14px;
+  border-bottom: 1px solid var(--panel-border); padding-bottom: 10px;
+}
+.audio-tab {
+  flex: 1; padding: 7px 0; font-size: 0.82rem; font-family: inherit;
+  background: transparent; color: var(--muted); border: 1px solid var(--input-border);
+  border-radius: 6px; cursor: pointer; transition: all .15s; text-align: center;
+}
+.audio-tab:hover { border-color: var(--accent); color: var(--accent); }
+.audio-tab.active { background: var(--accent); color: #fff; border-color: var(--accent); }
+.audio-hint {
+  font-size: 0.75rem; color: var(--muted); font-style: italic;
+  margin-top: 4px; margin-bottom: 0;
+}
+#audio-actions {
+  display: flex; gap: 8px; justify-content: flex-end; margin-top: 16px;
+}
+#audio-actions button {
+  padding: 8px 18px; border: none; border-radius: 8px;
+  font-size: 0.82rem; cursor: pointer; transition: background .15s;
+}
+#audio-cancel-btn { background: transparent; color: var(--muted); }
+#audio-cancel-btn:hover { background: rgba(0,0,0,.06); }
+#audio-generate-btn { background: var(--accent); color: #fff; }
+#audio-generate-btn:hover { background: var(--accent-hover); }
+#audio-generate-btn:disabled { opacity: .45; cursor: not-allowed; }
 #model-tooltip {
   display: none; position: fixed; z-index: 200;
   background: var(--tooltip-bg); color: var(--tooltip-text);
@@ -547,7 +639,7 @@ body {
 /* Mode picker in top bar */
 #mode-picker {
   display: flex; align-items: center;
-  padding: 4px 8px; font-size: 0.82rem;
+  padding: 4px 2px; font-size: 0.82rem;
 }
 #mode-select {
   padding: 5px 10px; font-size: 0.82rem; font-family: inherit;
@@ -675,6 +767,32 @@ body {
   font-size: 0.93rem; transition: background .15s; flex-shrink: 0;
 }
 #stop-btn:hover { background: #e55a5a; }
+#batch-btn {
+  padding: 10px 16px; background: transparent; color: var(--accent);
+  border: 1px solid var(--accent); border-radius: 10px; cursor: pointer;
+  font-size: 0.85rem; transition: background .15s, color .15s; flex-shrink: 0;
+}
+#batch-btn:hover { background: var(--accent); color: #fff; }
+
+/* Batch pending bubble */
+.batch-pending {
+  display: flex; align-items: center; gap: 8px;
+  color: var(--muted); font-size: 0.85rem; font-style: italic;
+}
+.batch-pending .batch-dot {
+  width: 8px; height: 8px; border-radius: 50%;
+  background: var(--accent); animation: batchPulse 1.5s infinite;
+}
+@keyframes batchPulse {
+  0%, 100% { opacity: .3; transform: scale(.8); }
+  50% { opacity: 1; transform: scale(1.1); }
+}
+.batch-pending .batch-cancel {
+  background: none; border: none; color: var(--muted);
+  cursor: pointer; font-size: 0.78rem; padding: 2px 6px;
+  transition: color .15s; margin-left: auto;
+}
+.batch-pending .batch-cancel:hover { color: #ff6b6b; }
 
 /* Streaming cursor */
 .bubble.streaming { min-height: 1.5em; }

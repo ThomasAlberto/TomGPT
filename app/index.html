@@ -39,19 +39,24 @@
         <span>System Prompt</span>
         <span id="sp-arrow">▼</span>
       </div>
-      <div id="model-picker">
-        <label for="model-select">Model</label>
-        <select id="model-select" onchange="onModelChange()">
-          <option disabled selected>Loading models...</option>
-        </select>
+      <div class="top-group">
+        <div id="model-picker">
+          <label for="model-select">Model</label>
+          <select id="model-select" onchange="onModelChange()">
+            <option disabled selected>Loading models...</option>
+          </select>
+        </div>
+        <div id="mode-picker">
+          <select id="mode-select" onchange="onModeChange()">
+            <option value="standard">Standard</option>
+            <option value="pro">Pro</option>
+          </select>
+        </div>
       </div>
-      <div id="mode-picker">
-        <select id="mode-select" onchange="onModeChange()">
-          <option value="standard">Standard</option>
-          <option value="pro">Pro</option>
-        </select>
+      <div class="top-group">
+        <button id="export-btn" onclick="exportConv()" title="Export to Markdown">Export</button>
+        <button id="audio-btn" onclick="exportAudio()" title="Export as Audio">Audio</button>
       </div>
-      <button id="export-btn" onclick="exportConv()" title="Export to Markdown">Export</button>
     </div>
     <div id="sp-body">
       <div id="sp-template-row">
@@ -86,6 +91,7 @@
         placeholder="Message… (Enter to send, Shift+Enter for newline)"
         onkeydown="handleKey(event)" oninput="autoResize(this)"></textarea>
       <button id="send-btn" onclick="send()">Send</button>
+      <button id="batch-btn" onclick="sendBatch()" title="Send via Batch API (50% cheaper, async)">Batch</button>
       <button id="stop-btn" onclick="stopGeneration()" style="display:none">Stop</button>
     </div>
   </div>
@@ -146,6 +152,60 @@
     <div id="new-conv-popup-actions">
       <button id="new-conv-cancel" onclick="closeNewConvPopup()">Cancel</button>
       <button id="new-conv-create" onclick="newConv()">Create</button>
+    </div>
+  </div>
+</div>
+
+<!-- Audio Export Modal -->
+<div id="audio-overlay" onclick="closeAudioModal()">
+  <div id="audio-modal" onclick="event.stopPropagation()">
+    <div id="audio-header">
+      <span id="audio-title">Export Audio</span>
+      <button id="audio-close" onclick="closeAudioModal()">&#x2715;</button>
+    </div>
+    <div id="audio-body">
+      <div id="audio-mode-tabs">
+        <button class="audio-tab active" data-mode="conversation" onclick="setAudioMode('conversation')">Conversation</button>
+        <button class="audio-tab" data-mode="podcast" onclick="setAudioMode('podcast')">Podcast</button>
+      </div>
+      <div id="audio-conv-fields">
+        <div class="audio-voice-row">
+          <label>User voice</label>
+          <div class="audio-voice-pick">
+            <select id="audio-user-voice"></select>
+            <button class="audio-preview-btn" onclick="previewVoice('audio-user-voice')">&#9654;</button>
+          </div>
+        </div>
+        <div class="audio-voice-row">
+          <label>Assistant voice</label>
+          <div class="audio-voice-pick">
+            <select id="audio-assistant-voice"></select>
+            <button class="audio-preview-btn" onclick="previewVoice('audio-assistant-voice')">&#9654;</button>
+          </div>
+        </div>
+      </div>
+      <div id="audio-podcast-fields" style="display:none">
+        <div class="audio-voice-row">
+          <label>Speaker One</label>
+          <div class="audio-voice-pick">
+            <select id="audio-speaker-one"></select>
+            <button class="audio-preview-btn" onclick="previewVoice('audio-speaker-one')">&#9654;</button>
+          </div>
+        </div>
+        <div class="audio-voice-row">
+          <label>Speaker Two</label>
+          <div class="audio-voice-pick">
+            <select id="audio-speaker-two"></select>
+            <button class="audio-preview-btn" onclick="previewVoice('audio-speaker-two')">&#9654;</button>
+          </div>
+        </div>
+        <p class="audio-hint">Parses SPEAKER_ONE: / SPEAKER_TWO: lines from assistant messages.</p>
+      </div>
+      <audio id="audio-player" style="display:none"></audio>
+      <div id="audio-actions">
+        <button id="audio-cancel-btn" onclick="closeAudioModal()">Cancel</button>
+        <button id="audio-generate-btn" onclick="generateAudio()">Generate</button>
+      </div>
     </div>
   </div>
 </div>

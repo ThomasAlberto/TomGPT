@@ -707,13 +707,19 @@ async function selectConv(id) {
 
     const area = document.getElementById('chat-area');
     area.innerHTML = '';
+    // Stop any existing batch polls
+    Object.keys(activeBatchJobs).forEach(stopBatchPoll);
+
     if (!conv.messages?.length) {
       area.innerHTML = '<div class="placeholder">Start the conversation!</div>';
     } else {
       conv.messages.forEach(m => {
+        if (m.batch_job_id && !m.content) return; // skip pending batch placeholders
         const names = (m.files || []).map(f => f.filename);
         addBubble(m.role, m.content, names, m.thinking, m.pro_initial, m.pro_critique);
       });
+      // Resume polling for pending batch jobs
+      resumeBatchPolls(conv.messages, id);
     }
     scrollDown();
     renderSidebar();
@@ -774,6 +780,124 @@ async function exportConv() {
   } catch (err) {
     console.error('Export failed:', err);
     showToast('Failed to export conversation.');
+  }
+}
+
+let audioVoices = [];
+
+async function loadAudioVoices() {
+  try {
+    const res = await fetch(`${API}/audio/voices`);
+    if (!res.ok) return;
+    audioVoices = await res.json();
+  } catch { /* ignore */ }
+}
+
+let audioMode = 'conversation';
+
+function exportAudio() {
+  if (!currentId) { showToast('Select a conversation first.'); return; }
+  const populate = (selectId, defaultVoice) => {
+    const sel = document.getElementById(selectId);
+    sel.innerHTML = audioVoices.map(v =>
+      `<option value="${v.id}" ${v.id === defaultVoice ? 'selected' : ''}>${v.name}</option>`
+    ).join('');
+  };
+  populate('audio-user-voice', 'nova');
+  populate('audio-assistant-voice', 'onyx');
+  populate('audio-speaker-one', 'nova');
+  populate('audio-speaker-two', 'onyx');
+  setAudioMode('conversation');
+  document.getElementById('audio-overlay').classList.add('visible');
+}
+
+function setAudioMode(mode) {
+  audioMode = mode;
+  document.querySelectorAll('.audio-tab').forEach(t => t.classList.toggle('active', t.dataset.mode === mode));
+  document.getElementById('audio-conv-fields').style.display = mode === 'conversation' ? '' : 'none';
+  document.getElementById('audio-podcast-fields').style.display = mode === 'podcast' ? '' : 'none';
+}
+
+function closeAudioModal() {
+  document.getElementById('audio-overlay').classList.remove('visible');
+  const player = document.getElementById('audio-player');
+  player.pause();
+  player.style.display = 'none';
+}
+
+async function previewVoice(selectId) {
+  const voice = document.getElementById(selectId).value;
+  const btns = document.querySelectorAll('.audio-preview-btn');
+  btns.forEach(b => b.disabled = true);
+
+  try {
+    const player = document.getElementById('audio-player');
+    player.src = `${API}/audio/preview/${voice}`;
+    player.style.display = 'block';
+    await player.play();
+  } catch (err) {
+    console.error('Preview failed:', err);
+    showToast('Failed to play preview.');
+  } finally {
+    const btns2 = document.querySelectorAll('.audio-preview-btn');
+    btns2.forEach(b => b.disabled = false);
+  }
+}
+
+async function generateAudio() {
+  const btn = document.getElementById('audio-generate-btn');
+  btn.disabled = true;
+  btn.textContent = 'Generating…';
+
+  let url, payload;
+  if (audioMode === 'podcast') {
+    url = `${API}/conversations/${currentId}/audio/podcast`;
+    payload = {
+      speaker_one_voice: document.getElementById('audio-speaker-one').value,
+      speaker_two_voice: document.getElementById('audio-speaker-two').value,
+      format: 'mp3', speed: 1.0,
+    };
+  } else {
+    url = `${API}/conversations/${currentId}/audio`;
+    payload = {
+      user_voice: document.getElementById('audio-user-voice').value,
+      assistant_voice: document.getElementById('audio-assistant-voice').value,
+      format: 'mp3', speed: 1.0,
+    };
+  }
+
+  try {
+    const res = await fetch(url, {
+      method: 'POST', headers: h(),
+      body: JSON.stringify(payload),
+    });
+
+    if (!res.ok) {
+      const err = await res.json();
+      throw new Error(err.detail || `HTTP ${res.status}`);
+    }
+
+    const blob = await res.blob();
+    const disposition = res.headers.get('content-disposition') || '';
+    const match = disposition.match(/filename="?([^"]+)"?/);
+    const filename = match ? match[1] : 'conversation.mp3';
+
+    const dlUrl = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = dlUrl;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(dlUrl);
+    showToast('Audio exported!');
+    closeAudioModal();
+  } catch (err) {
+    console.error('Audio export failed:', err);
+    showToast(`Audio failed: ${err.message}`);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = 'Generate';
   }
 }
 
@@ -1161,9 +1285,150 @@ function finalizeStreamingBubble(bubble, content) {
   scrollDown();
 }
 
+// ── Batch API ──────────────────────────────────────────────────────────────
+let activeBatchJobs = {}; // { jobId: { conversationId, interval } }
+
+async function sendBatch() {
+  if (!currentId) { alert('Select or create a conversation first.'); return; }
+  const input = document.getElementById('msg-input');
+  const msg = input.value.trim();
+  if (!msg && !pendingFiles.length) return;
+
+  input.value = '';
+  autoResize(input);
+  document.getElementById('placeholder')?.remove();
+
+  let fileRefs = [];
+  if (pendingFiles.length) fileRefs = await uploadFiles();
+
+  addBubble('user', msg, fileRefs.map(f => f.filename));
+
+  try {
+    const res = await fetch(`${API}/batch/submit`, {
+      method: 'POST', headers: h(),
+      body: JSON.stringify({
+        conversation_id: currentId, message: msg, model: getModel(), files: fileRefs,
+        mode: document.getElementById('mode-select').value,
+        thinking_budget: 8000,
+      }),
+    });
+    if (!res.ok) {
+      const err = await res.json();
+      throw new Error(err.detail || `HTTP ${res.status}`);
+    }
+    const data = await res.json();
+
+    if (convMap[currentId] && data.title) {
+      convMap[currentId].title = data.title;
+      renderSidebar();
+    }
+
+    addBatchPendingBubble(data.job_id, data.total_steps);
+    startBatchPoll(data.job_id, currentId);
+  } catch (err) {
+    console.error('Batch submit error:', err);
+    showToast(`Batch failed: ${err.message}`);
+  }
+}
+
+function addBatchPendingBubble(jobId, totalSteps) {
+  const area = document.getElementById('chat-area');
+  const wrap = document.createElement('div');
+  wrap.className = 'msg assistant';
+  wrap.id = `batch-${jobId}`;
+
+  const bubble = document.createElement('div');
+  bubble.className = 'bubble';
+  const stepLabel = totalSteps > 1 ? ' (Step 1/' + totalSteps + ')' : '';
+  bubble.innerHTML = `<div class="batch-pending">
+    <span class="batch-dot"></span>
+    <span class="batch-text">Batch processing${stepLabel}…</span>
+    <button class="batch-cancel" onclick="cancelBatch('${jobId}')">Cancel</button>
+  </div>`;
+  wrap.appendChild(bubble);
+  area.appendChild(wrap);
+  scrollDown();
+}
+
+function startBatchPoll(jobId, conversationId) {
+  if (activeBatchJobs[jobId]) return;
+  const interval = setInterval(() => pollBatchJob(jobId, conversationId), 30000);
+  activeBatchJobs[jobId] = { conversationId, interval };
+  // Also poll immediately after a short delay (batch might already be done)
+  setTimeout(() => pollBatchJob(jobId, conversationId), 5000);
+}
+
+async function pollBatchJob(jobId, conversationId) {
+  try {
+    const res = await fetch(`${API}/batch/jobs/${jobId}`);
+    if (!res.ok) return;
+    const data = await res.json();
+
+    // Update pending bubble with step progress
+    const pendingEl = document.getElementById(`batch-${jobId}`);
+    if (pendingEl && data.status === 'processing' && data.total_steps > 1) {
+      const textEl = pendingEl.querySelector('.batch-text');
+      if (textEl) textEl.textContent = `Batch processing (Step ${data.current_step + 1}/${data.total_steps})…`;
+    }
+
+    if (data.status === 'completed') {
+      stopBatchPoll(jobId);
+      // Reload the conversation to show the result
+      if (currentId === conversationId) {
+        await selectConv(conversationId);
+      }
+      showToast('Batch response ready!');
+    } else if (data.status === 'failed') {
+      stopBatchPoll(jobId);
+      if (pendingEl) {
+        const bubble = pendingEl.querySelector('.bubble');
+        if (bubble) bubble.innerHTML = `<span style="color:#ff6b6b">Batch failed: ${esc(data.error || 'Unknown error')}</span>`;
+      }
+      showToast('Batch job failed.');
+    }
+  } catch (err) {
+    console.error('Batch poll error:', err);
+  }
+}
+
+function stopBatchPoll(jobId) {
+  const job = activeBatchJobs[jobId];
+  if (job) {
+    clearInterval(job.interval);
+    delete activeBatchJobs[jobId];
+  }
+}
+
+async function cancelBatch(jobId) {
+  if (!confirm('Cancel this batch job?')) return;
+  try {
+    const res = await fetch(`${API}/batch/jobs/${jobId}`, { method: 'DELETE' });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    stopBatchPoll(jobId);
+    const pendingEl = document.getElementById(`batch-${jobId}`);
+    if (pendingEl) pendingEl.remove();
+    // Reload conversation to clean up
+    if (currentId) await selectConv(currentId);
+    showToast('Batch cancelled.');
+  } catch (err) {
+    console.error('Failed to cancel batch:', err);
+    showToast('Failed to cancel batch.');
+  }
+}
+
+// On conversation load, resume polling for any pending batch messages
+function resumeBatchPolls(messages, conversationId) {
+  for (const m of messages) {
+    if (m.batch_job_id && !m.content) {
+      addBatchPendingBubble(m.batch_job_id, 1);
+      startBatchPoll(m.batch_job_id, conversationId);
+    }
+  }
+}
+
 // ── Init ───────────────────────────────────────────────────────────────────
 async function init() {
-  await Promise.all([loadModels(), loadList(), loadFolders(), loadPromptTemplates()]);
+  await Promise.all([loadModels(), loadList(), loadFolders(), loadPromptTemplates(), loadAudioVoices()]);
   renderSidebar();
   initPricingTooltip();
 }

@@ -1,6 +1,10 @@
 .env
+venv/
 
 memory.json
 
 uploads/
 chroma_db/
+
+audio/outputs/conversation/
+audio/outputs/podcasts/

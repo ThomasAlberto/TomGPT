@@ -1,7 +1,9 @@
 import base64
+import io
 import json
 import logging
 import os
+import re
 import shutil
 import tempfile
 import time
@@ -17,7 +19,7 @@ import fitz
 import openai
 from dotenv import load_dotenv
 
-from . import rag
+from . import batch, rag
 from fastapi import FastAPI, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, StreamingResponse
@@ -45,6 +47,7 @@ app.add_middleware(
 anthropic_client = anthropic.Anthropic(api_key=_require_env("ANTHROPIC_API_KEY"))
 openai_client = openai.OpenAI(api_key=_require_env("OPENAI_API_KEY"))
 rag.init(openai_client)
+batch.init(anthropic_client, openai_client)
 
 MEMORY_PATH = Path(__file__).parent / "memory.json"
 STATIC_DIR = Path(__file__).parent
@@ -1042,4 +1045,340 @@ async def chat_stream(body: ChatMessage):
         event_generator(),
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "Connection": "keep-alive", "X-Accel-Buffering": "no"},
+    )
+
+
+# ── Batch API ─────────────────────────────────────────────────────────────
+
+@app.post("/batch/submit")
+async def batch_submit(body: ChatMessage):
+    memory = load_memory()
+    conv = memory["conversations"].get(body.conversation_id)
+    if not conv:
+        raise HTTPException(status_code=404, detail="Conversation not found")
+
+    model = body.model
+    if model not in AVAILABLE_MODELS:
+        model = "claude-sonnet-4-6"
+    conv["model"] = model
+    provider = AVAILABLE_MODELS[model]["provider"]
+
+    mode = body.mode
+    if mode == "thinking" and not AVAILABLE_MODELS[model].get("thinking"):
+        mode = "standard"
+
+    file_refs = []
+    for f in body.files:
+        if _find_upload(f.file_id):
+            file_refs.append({"file_id": f.file_id, "filename": f.filename})
+
+    stored_message = {"role": "user", "content": body.message}
+    if file_refs:
+        stored_message["files"] = file_refs
+    conv["messages"].append(stored_message)
+
+    full_system = _build_system_prompt(model, conv.get("system_prompt", ""))
+    full_system = _inject_rag_context(full_system, conv.get("folder_id"), body.message, memory)
+
+    # Build provider-specific messages
+    if provider == "anthropic":
+        api_messages = _build_anthropic_messages(conv["messages"])
+    else:
+        api_messages = []
+        for m in conv["messages"]:
+            if m["role"] == "user" and m.get("files"):
+                api_messages.append({"role": "user", "content": build_openai_content(m["content"], m["files"])})
+            else:
+                api_messages.append({"role": m["role"], "content": m["content"]})
+
+    job_id = str(uuid.uuid4())
+
+    # Save pending assistant message
+    conv["messages"].append({"role": "assistant", "content": "", "batch_job_id": job_id})
+    save_memory(memory)
+
+    critique_model = "claude-haiku-4-5-20251001" if provider == "anthropic" else "gpt-4.1-mini"
+
+    job = batch.submit_job({
+        "job_id": job_id,
+        "conversation_id": body.conversation_id,
+        "mode": mode,
+        "provider": provider,
+        "model": model,
+        "system": full_system,
+        "api_messages": api_messages,
+        "user_message": body.message,
+        "thinking_budget": body.thinking_budget,
+        "critique_model": critique_model,
+    })
+
+    # Generate title if first message
+    if len(conv["messages"]) == 2 and conv.get("title") == "New Conversation":
+        try:
+            conv["title"] = generate_title(body.message, provider)
+            memory2 = load_memory()
+            c2 = memory2["conversations"].get(body.conversation_id)
+            if c2:
+                c2["title"] = conv["title"]
+                save_memory(memory2)
+        except Exception:
+            pass
+
+    return {"job_id": job_id, "status": job["status"], "total_steps": job["total_steps"],
+            "title": conv.get("title", "New Conversation")}
+
+
+@app.get("/batch/jobs/{job_id}")
+async def batch_check(job_id: str):
+    job = batch.check_and_advance(job_id)
+
+    if job["status"] == "completed" and not job.get("result_applied"):
+        # Apply result to conversation
+        memory = load_memory()
+        conv = memory["conversations"].get(job["conversation_id"])
+        if conv:
+            # Find and replace the pending assistant message
+            for i, m in enumerate(conv["messages"]):
+                if m.get("batch_job_id") == job_id:
+                    conv["messages"][i] = {"role": "assistant", "content": job["result"]}
+                    if job.get("thinking"):
+                        conv["messages"][i]["thinking"] = job["thinking"]
+                        if job.get("thinking_signature"):
+                            conv["messages"][i]["thinking_signature"] = job["thinking_signature"]
+                    if job.get("initial_response"):
+                        conv["messages"][i]["pro_initial"] = job["initial_response"]
+                        conv["messages"][i]["pro_critique"] = job["critique_response"]
+                    break
+            save_memory(memory)
+        batch.mark_applied(job_id)
+
+    return {
+        "job_id": job["id"],
+        "status": job["status"],
+        "current_step": job.get("current_step", 0),
+        "total_steps": job.get("total_steps", 1),
+        "result": job.get("result"),
+        "error": job.get("error"),
+    }
+
+
+@app.delete("/batch/jobs/{job_id}")
+async def batch_cancel(job_id: str):
+    job = batch.cancel_job(job_id)
+
+    # Remove pending assistant message
+    if job.get("conversation_id"):
+        memory = load_memory()
+        conv = memory["conversations"].get(job["conversation_id"])
+        if conv:
+            conv["messages"] = [m for m in conv["messages"] if m.get("batch_job_id") != job_id]
+            # Also remove the user message that preceded it
+            if conv["messages"] and conv["messages"][-1]["role"] == "user":
+                conv["messages"].pop()
+            save_memory(memory)
+
+    return {"ok": True, "status": job.get("status")}
+
+
+# ── Audio export ──────────────────────────────────────────────────────────
+
+AUDIO_DIR = Path(__file__).parent / "audio"
+AUDIO_PREVIEW_DIR = AUDIO_DIR / "previews"
+AUDIO_CONV_DIR = AUDIO_DIR / "outputs" / "conversation"
+AUDIO_PODCAST_DIR = AUDIO_DIR / "outputs" / "podcasts"
+AUDIO_DIR.mkdir(exist_ok=True)
+AUDIO_PREVIEW_DIR.mkdir(parents=True, exist_ok=True)
+AUDIO_CONV_DIR.mkdir(parents=True, exist_ok=True)
+AUDIO_PODCAST_DIR.mkdir(parents=True, exist_ok=True)
+
+TTS_VOICES = {
+    "user": "nova",
+    "assistant": "onyx",
+}
+
+
+TTS_VOICE_LIST = ["alloy", "ash", "coral", "echo", "fable", "nova", "onyx", "sage", "shimmer"]
+TTS_PREVIEW_LINES = {
+    "alloy":   "Hey there! I'm Alloy. I've got a balanced, versatile tone — great for everyday conversations.",
+    "ash":     "Hi, I'm Ash. My voice is calm and measured. I work well for thoughtful, explanatory content.",
+    "coral":   "Hi! I'm Coral. I sound friendly and approachable. People say I'm great for casual chats.",
+    "echo":    "Greetings. I'm Echo. My tone is clear and resonant, well suited for professional or formal content.",
+    "fable":   "Hello there! I'm Fable. I have a distinctive, characterful voice — good for creative and dramatic readings.",
+    "nova":    "Hey! I'm Nova. I'm bright and energetic. I bring a natural, conversational energy to everything I read.",
+    "onyx":    "Hello. I'm Onyx. My voice is deep and authoritative. I'm often chosen for serious or technical discussions.",
+    "sage":    "Hi, I'm Sage. I have a smooth, thoughtful delivery. I'm well suited for educational and analytical content.",
+    "shimmer": "Hello! I'm Shimmer. I sound light and clear, with a gentle quality that works nicely for friendly dialogue.",
+}
+
+
+@app.get("/audio/voices")
+async def list_voices():
+    return [{"id": v, "name": v.title()} for v in TTS_VOICE_LIST]
+
+
+@app.get("/audio/preview/{voice}")
+async def preview_voice(voice: str):
+    if voice not in TTS_VOICE_LIST:
+        raise HTTPException(status_code=400, detail=f"Unknown voice: {voice}")
+
+    cache_path = AUDIO_PREVIEW_DIR / f"preview-{voice}.mp3"
+    if not cache_path.exists():
+        logger.info("Generating TTS preview for voice: %s", voice)
+        response = openai_client.audio.speech.create(
+            model="tts-1", voice=voice, input=TTS_PREVIEW_LINES[voice], response_format="mp3",
+        )
+        cache_path.write_bytes(response.content)
+
+    return FileResponse(str(cache_path), media_type="audio/mp3", filename=f"preview-{voice}.mp3")
+
+
+class AudioExportOptions(BaseModel):
+    user_voice: str = "nova"
+    assistant_voice: str = "onyx"
+    format: str = "mp3"
+    speed: float = 1.0
+
+
+@app.post("/conversations/{conversation_id}/audio")
+async def export_audio(conversation_id: str, body: AudioExportOptions):
+    from pydub import AudioSegment
+
+    memory = load_memory()
+    conv = memory["conversations"].get(conversation_id)
+    if not conv:
+        raise HTTPException(status_code=404, detail="Conversation not found")
+
+    messages = [m for m in conv.get("messages", []) if m.get("content") and not m.get("batch_job_id")]
+    if not messages:
+        raise HTTPException(status_code=400, detail="No messages to convert")
+
+    if body.format not in ("mp3", "wav"):
+        raise HTTPException(status_code=400, detail="Format must be mp3 or wav")
+
+    voice_map = {"user": body.user_voice, "assistant": body.assistant_voice}
+    tts_format = "mp3"  # always generate as mp3, convert to wav if needed
+
+    segments: list[AudioSegment] = []
+    pause = AudioSegment.silent(duration=600)  # 600ms pause between messages
+
+    for i, m in enumerate(messages):
+        text = m["content"][:4096]  # TTS limit per call
+        role = m["role"]
+        voice = voice_map.get(role, "onyx")
+
+        logger.info("TTS: message %d/%d, role=%s, voice=%s, %d chars",
+                     i + 1, len(messages), role, voice, len(text))
+
+        try:
+            response = openai_client.audio.speech.create(
+                model="tts-1",
+                voice=voice,
+                input=text,
+                response_format=tts_format,
+                speed=body.speed,
+            )
+            audio_bytes = response.content
+            seg = AudioSegment.from_file(io.BytesIO(audio_bytes), format=tts_format)
+            segments.append(seg)
+            if i < len(messages) - 1:
+                segments.append(pause)
+        except Exception as e:
+            logger.error("TTS failed for message %d: %s", i, e)
+            raise HTTPException(status_code=500, detail=f"TTS failed on message {i + 1}: {e}")
+
+    combined = segments[0]
+    for seg in segments[1:]:
+        combined += seg
+
+    title = conv.get("title", "conversation").strip()
+    slug = "".join(c if c.isalnum() or c in " -_" else "" for c in title).strip().replace(" ", "-")[:50] or "conversation"
+    filename = f"{slug}.{body.format}"
+    out_path = AUDIO_CONV_DIR / filename
+
+    combined.export(str(out_path), format=body.format)
+    logger.info("Audio exported: %s (%d messages, %.1fs)", filename, len(messages), combined.duration_seconds)
+
+    return FileResponse(
+        str(out_path),
+        media_type=f"audio/{body.format}",
+        filename=filename,
+    )
+
+
+_PODCAST_LINE_RE = re.compile(r"^(SPEAKER_ONE|SPEAKER_TWO)\s*:\s*(.+)", re.MULTILINE)
+
+
+def _parse_podcast_script(text: str) -> list[tuple[str, str]]:
+    """Extract (speaker, line) pairs from SPEAKER_ONE/SPEAKER_TWO formatted text."""
+    return [(m.group(1), m.group(2).strip()) for m in _PODCAST_LINE_RE.finditer(text) if m.group(2).strip()]
+
+
+class PodcastExportOptions(BaseModel):
+    speaker_one_voice: str = "nova"
+    speaker_two_voice: str = "onyx"
+    format: str = "mp3"
+    speed: float = 1.0
+
+
+@app.post("/conversations/{conversation_id}/audio/podcast")
+async def export_podcast(conversation_id: str, body: PodcastExportOptions):
+    from pydub import AudioSegment
+
+    memory = load_memory()
+    conv = memory["conversations"].get(conversation_id)
+    if not conv:
+        raise HTTPException(status_code=404, detail="Conversation not found")
+
+    if body.format not in ("mp3", "wav"):
+        raise HTTPException(status_code=400, detail="Format must be mp3 or wav")
+
+    # Collect all SPEAKER_ONE/SPEAKER_TWO lines from assistant messages
+    all_text = "\n".join(m["content"] for m in conv.get("messages", [])
+                         if m.get("role") == "assistant" and m.get("content"))
+    lines = _parse_podcast_script(all_text)
+
+    if not lines:
+        raise HTTPException(status_code=400, detail="No SPEAKER_ONE/SPEAKER_TWO lines found in assistant messages")
+
+    voice_map = {"SPEAKER_ONE": body.speaker_one_voice, "SPEAKER_TWO": body.speaker_two_voice}
+    tts_format = "mp3"
+
+    segments: list[AudioSegment] = []
+    pause = AudioSegment.silent(duration=400)  # 400ms between lines
+
+    for i, (speaker, text) in enumerate(lines):
+        voice = voice_map[speaker]
+        text = text[:4096]
+
+        logger.info("Podcast TTS: line %d/%d, %s (%s), %d chars",
+                     i + 1, len(lines), speaker, voice, len(text))
+
+        try:
+            response = openai_client.audio.speech.create(
+                model="tts-1", voice=voice, input=text, response_format=tts_format, speed=body.speed,
+            )
+            seg = AudioSegment.from_file(io.BytesIO(response.content), format=tts_format)
+            segments.append(seg)
+            if i < len(lines) - 1:
+                segments.append(pause)
+        except Exception as e:
+            logger.error("Podcast TTS failed on line %d: %s", i, e)
+            raise HTTPException(status_code=500, detail=f"TTS failed on line {i + 1}: {e}")
+
+    combined = segments[0]
+    for seg in segments[1:]:
+        combined += seg
+
+    title = conv.get("title", "podcast").strip()
+    slug = "".join(c if c.isalnum() or c in " -_" else "" for c in title).strip().replace(" ", "-")[:50] or "podcast"
+    filename = f"{slug}.{body.format}"
+    out_path = AUDIO_PODCAST_DIR / filename
+
+    combined.export(str(out_path), format=body.format)
+    logger.info("Podcast exported: %s (%d lines, %.1fs)", filename, len(lines), combined.duration_seconds)
+
+    return FileResponse(
+        str(out_path),
+        media_type=f"audio/{body.format}",
+        filename=filename,
     )
