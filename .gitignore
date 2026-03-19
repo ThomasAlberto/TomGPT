@@ -2,6 +2,7 @@
 venv/
 
 memory.json
+batches.json
 
 uploads/
 chroma_db/
