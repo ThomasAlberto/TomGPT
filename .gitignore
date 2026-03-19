@@ -9,5 +9,7 @@ chroma_db/
 
 .claude/
 
-app/audio/outputs/conversation/
-app/audio/outputs/podcasts/
+app/audio/outputs/conversation/*
+!app/audio/outputs/conversation/.gitkeep
+app/audio/outputs/podcasts/*
+!app/audio/outputs/podcasts/.gitkeep
