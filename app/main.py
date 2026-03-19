@@ -240,6 +240,21 @@ async def delete_conversation(conversation_id: str):
     return {"ok": True}
 
 
+class TitleUpdate(BaseModel):
+    title: str
+
+
+@app.patch("/conversations/{conversation_id}/title")
+async def update_title(conversation_id: str, body: TitleUpdate):
+    memory = load_memory()
+    conv = memory["conversations"].get(conversation_id)
+    if not conv:
+        raise HTTPException(status_code=404, detail="Conversation not found")
+    conv["title"] = body.title.strip() or "New Conversation"
+    save_memory(memory)
+    return {"ok": True, "title": conv["title"]}
+
+
 @app.patch("/conversations/{conversation_id}/system-prompt")
 async def update_system_prompt(conversation_id: str, body: SystemPromptUpdate):
     memory = load_memory()

@@ -581,15 +581,65 @@ async function loadList() {
   }
 }
 
+let _convClickTimer = null;
+
 function renderConvItem(c) {
   return `
-    <div class="conv-item ${c.id === currentId ? 'active' : ''}" onclick="selectConv('${c.id}')">
-      <span class="conv-title">${esc(c.title || 'New Conversation')}</span>
+    <div class="conv-item ${c.id === currentId ? 'active' : ''}"
+         onclick="onConvClick('${c.id}')"
+         ondblclick="onConvDblClick('${c.id}')">
+      <span class="conv-title" data-cid="${c.id}">${esc(c.title || 'New Conversation')}</span>
       <div class="conv-actions">
         <button class="move-btn" onclick="toggleFolderMenu('${c.id}', event)" title="Move to folder">&#x21C5;</button>
         <button class="del-btn" onclick="event.stopPropagation(); delConv('${c.id}')">&#x2715;</button>
       </div>
     </div>`;
+}
+
+function onConvClick(cid) {
+  clearTimeout(_convClickTimer);
+  _convClickTimer = setTimeout(() => selectConv(cid), 250);
+}
+
+function onConvDblClick(cid) {
+  clearTimeout(_convClickTimer);
+  startConvRename(cid);
+}
+
+function startConvRename(cid) {
+  const el = document.querySelector(`.conv-title[data-cid="${cid}"]`);
+  if (!el) return;
+  const input = document.createElement('input');
+  input.type = 'text';
+  input.className = 'conv-rename-input';
+  input.value = convMap[cid]?.title || '';
+  input.onblur = () => finishConvRename(cid, input.value);
+  input.onkeydown = (e) => {
+    if (e.key === 'Enter') input.blur();
+    if (e.key === 'Escape') { input.value = convMap[cid]?.title || ''; input.blur(); }
+  };
+  input.onclick = (e) => e.stopPropagation();
+  el.replaceWith(input);
+  input.focus();
+  input.select();
+}
+
+async function finishConvRename(cid, title) {
+  title = title.trim();
+  if (title && title !== convMap[cid]?.title) {
+    try {
+      const res = await fetch(`${API}/conversations/${cid}/title`, {
+        method: 'PATCH', headers: h(),
+        body: JSON.stringify({ title })
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      if (convMap[cid]) convMap[cid].title = title;
+    } catch (err) {
+      console.error('Failed to rename conversation:', err);
+      showToast('Failed to rename conversation.');
+    }
+  }
+  renderSidebar();
 }
 
 function renderFolderTree(parentId, depth) {
