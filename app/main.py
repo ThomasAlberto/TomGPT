@@ -129,25 +129,25 @@ class FolderMove(BaseModel):
 
 AVAILABLE_MODELS = {
     # Anthropic
-    "claude-opus-4-6":           {"name": "Claude Opus 4.6",   "provider": "anthropic", "maker": "Anthropic", "input_price": 5.00,  "output_price": 25.00, "thinking": True},
-    "claude-sonnet-4-6":         {"name": "Claude Sonnet 4.6", "provider": "anthropic", "maker": "Anthropic", "input_price": 3.00,  "output_price": 15.00, "thinking": True},
-    "claude-haiku-4-5-20251001": {"name": "Claude Haiku 4.5",  "provider": "anthropic", "maker": "Anthropic", "input_price": 1.00,  "output_price": 5.00},
-    # "claude-opus-4-20250514":    {"name": "Claude Opus 4",     "provider": "anthropic", "maker": "Anthropic", "input_price": 15.00, "output_price": 75.00},
-    "claude-sonnet-4-20250514":  {"name": "Claude Sonnet 4",   "provider": "anthropic", "maker": "Anthropic", "input_price": 3.00,  "output_price": 15.00},
-    "claude-haiku-3-5-20241022": {"name": "Claude 3.5 Haiku",  "provider": "anthropic", "maker": "Anthropic", "input_price": 0.80,  "output_price": 4.00},
+    "claude-opus-4-6":           {"name": "Claude Opus 4.6",   "provider": "anthropic", "maker": "Anthropic", "input_price": 5.00,  "output_price": 25.00, "context": 1000000, "thinking": True},
+    "claude-sonnet-4-6":         {"name": "Claude Sonnet 4.6", "provider": "anthropic", "maker": "Anthropic", "input_price": 3.00,  "output_price": 15.00, "context": 1000000, "thinking": True},
+    "claude-haiku-4-5-20251001": {"name": "Claude Haiku 4.5",  "provider": "anthropic", "maker": "Anthropic", "input_price": 1.00,  "output_price": 5.00,  "context": 200000},
+    # "claude-opus-4-20250514":    {"name": "Claude Opus 4",     "provider": "anthropic", "maker": "Anthropic", "input_price": 15.00, "output_price": 75.00, "context": 200000},
+    "claude-sonnet-4-20250514":  {"name": "Claude Sonnet 4",   "provider": "anthropic", "maker": "Anthropic", "input_price": 3.00,  "output_price": 15.00, "context": 200000},
+    "claude-haiku-3-5-20241022": {"name": "Claude 3.5 Haiku",  "provider": "anthropic", "maker": "Anthropic", "input_price": 0.80,  "output_price": 4.00,  "context": 200000},
     # OpenAI
-    "gpt-5.4":                   {"name": "GPT-5.4",           "provider": "openai",    "maker": "OpenAI",    "input_price": 2.50,  "output_price": 15.00},
-    "gpt-5.3":                   {"name": "GPT-5.3",           "provider": "openai",    "maker": "OpenAI",    "input_price": 1.75,  "output_price": 14.00},
-    "gpt-5.2":                   {"name": "GPT-5.2",           "provider": "openai",    "maker": "OpenAI",    "input_price": 1.75,  "output_price": 14.00},
-    "gpt-5":                     {"name": "GPT-5",             "provider": "openai",    "maker": "OpenAI",    "input_price": 1.25,  "output_price": 10.00},
-    "gpt-4.1":                   {"name": "GPT-4.1",           "provider": "openai",    "maker": "OpenAI",    "input_price": 2.00,  "output_price": 8.00},
-    "gpt-4.1-mini":              {"name": "GPT-4.1 Mini",      "provider": "openai",    "maker": "OpenAI",    "input_price": 0.40,  "output_price": 1.60},
-    "gpt-4.1-nano":              {"name": "GPT-4.1 Nano",      "provider": "openai",    "maker": "OpenAI",    "input_price": 0.10,  "output_price": 0.40},
-    "gpt-4o":                    {"name": "GPT-4o",            "provider": "openai",    "maker": "OpenAI",    "input_price": 2.50,  "output_price": 10.00},
-    "gpt-4o-mini":               {"name": "GPT-4o Mini",       "provider": "openai",    "maker": "OpenAI",    "input_price": 0.15,  "output_price": 0.60},
-    "o3":                        {"name": "o3",                "provider": "openai",    "maker": "OpenAI",    "input_price": 2.00,  "output_price": 8.00},
-    "o4-mini":                   {"name": "o4-mini",           "provider": "openai",    "maker": "OpenAI",    "input_price": 0.55,  "output_price": 2.20},
-    "o3-mini":                   {"name": "o3-mini",           "provider": "openai",    "maker": "OpenAI",    "input_price": 1.10,  "output_price": 4.40},
+    "gpt-5.4":                   {"name": "GPT-5.4",           "provider": "openai",    "maker": "OpenAI",    "input_price": 2.50,  "output_price": 15.00, "context": 1000000},
+    "gpt-5.3":                   {"name": "GPT-5.3",           "provider": "openai",    "maker": "OpenAI",    "input_price": 1.75,  "output_price": 14.00, "context": 1000000},
+    "gpt-5.2":                   {"name": "GPT-5.2",           "provider": "openai",    "maker": "OpenAI",    "input_price": 1.75,  "output_price": 14.00, "context": 1000000},
+    "gpt-5":                     {"name": "GPT-5",             "provider": "openai",    "maker": "OpenAI",    "input_price": 1.25,  "output_price": 10.00, "context": 1000000},
+    "gpt-4.1":                   {"name": "GPT-4.1",           "provider": "openai",    "maker": "OpenAI",    "input_price": 2.00,  "output_price": 8.00,  "context": 1000000},
+    "gpt-4.1-mini":              {"name": "GPT-4.1 Mini",      "provider": "openai",    "maker": "OpenAI",    "input_price": 0.40,  "output_price": 1.60,  "context": 1000000},
+    "gpt-4.1-nano":              {"name": "GPT-4.1 Nano",      "provider": "openai",    "maker": "OpenAI",    "input_price": 0.10,  "output_price": 0.40,  "context": 1000000},
+    "gpt-4o":                    {"name": "GPT-4o",            "provider": "openai",    "maker": "OpenAI",    "input_price": 2.50,  "output_price": 10.00, "context": 128000},
+    "gpt-4o-mini":               {"name": "GPT-4o Mini",       "provider": "openai",    "maker": "OpenAI",    "input_price": 0.15,  "output_price": 0.60,  "context": 128000},
+    "o3":                        {"name": "o3",                "provider": "openai",    "maker": "OpenAI",    "input_price": 2.00,  "output_price": 8.00,  "context": 200000},
+    "o4-mini":                   {"name": "o4-mini",           "provider": "openai",    "maker": "OpenAI",    "input_price": 0.55,  "output_price": 2.20,  "context": 200000},
+    "o3-mini":                   {"name": "o3-mini",           "provider": "openai",    "maker": "OpenAI",    "input_price": 1.10,  "output_price": 4.40,  "context": 200000},
 }
 
 

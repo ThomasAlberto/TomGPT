@@ -140,7 +140,8 @@ function initPricingTooltip() {
   function showTooltip() {
     const info = getModelInfo(select.value);
     if (!info) { tooltip.style.display = 'none'; return; }
-    tooltip.innerHTML = `<strong>${esc(info.name)}</strong><br>Input: $${info.input_price.toFixed(2)} / 1M tokens<br>Output: $${info.output_price.toFixed(2)} / 1M tokens`;
+    const ctx = info.context >= 1000000 ? `${(info.context / 1000000).toFixed(1)}M` : `${Math.round(info.context / 1000)}K`;
+    tooltip.innerHTML = `<strong>${esc(info.name)}</strong><br>Context: ${ctx} tokens<br>Input: $${info.input_price.toFixed(2)} / 1M tokens<br>Output: $${info.output_price.toFixed(2)} / 1M tokens`;
     const rect = select.getBoundingClientRect();
     tooltip.style.left = rect.left + 'px';
     tooltip.style.top = (rect.bottom + 6) + 'px';
