@@ -7,7 +7,7 @@ app/batches.json
 uploads/
 chroma_db/
 
+.claude/
+
 app/audio/outputs/conversation/
 app/audio/outputs/podcasts/
-
-.claude/
