@@ -9,3 +9,5 @@ chroma_db/
 
 audio/outputs/conversation/
 audio/outputs/podcasts/
+
+.claude/
