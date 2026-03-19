@@ -1,13 +1,13 @@
 .env
 venv/
 
-memory.json
-batches.json
+app/memory.json
+app/batches.json
 
 uploads/
 chroma_db/
 
-audio/outputs/conversation/
-audio/outputs/podcasts/
+app/audio/outputs/conversation/
+app/audio/outputs/podcasts/
 
 .claude/
