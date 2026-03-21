@@ -10,9 +10,11 @@ marked.setOptions({ breaks: true });
 // ── Helpers ────────────────────────────────────────────────────────────────
 const h    = () => ({ 'Content-Type': 'application/json' });
 const esc  = s => s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');
-const scrollDown = () => {
+const scrollDown = (force = false) => {
   const a = document.getElementById('chat-area');
-  a.scrollTop = a.scrollHeight;
+  if (force || a.scrollHeight - a.scrollTop - a.clientHeight < 100) {
+    a.scrollTop = a.scrollHeight;
+  }
 };
 
 function showToast(msg) {
@@ -772,7 +774,7 @@ async function selectConv(id) {
       // Resume polling for pending batch jobs
       resumeBatchPolls(conv.messages, id);
     }
-    scrollDown();
+    scrollDown(true);
     renderSidebar();
   } catch (err) {
     console.error('Failed to load conversation:', err);
@@ -1290,7 +1292,7 @@ function addBubble(role, content, fileNames, thinking, proInitial, proCritique) 
   bubble.innerHTML = role === 'assistant' ? marked.parse(content) : esc(content);
   wrap.appendChild(bubble);
   area.appendChild(wrap);
-  scrollDown();
+  scrollDown(true);
   return wrap;
 }
 
@@ -1319,7 +1321,7 @@ function addStreamingBubble() {
   bubble.innerHTML = '<span class="cursor">▊</span>';
   wrap.appendChild(bubble);
   area.appendChild(wrap);
-  scrollDown();
+  scrollDown(true);
   return bubble;
 }
 
@@ -1398,7 +1400,7 @@ function addBatchPendingBubble(jobId, totalSteps) {
   </div>`;
   wrap.appendChild(bubble);
   area.appendChild(wrap);
-  scrollDown();
+  scrollDown(true);
 }
 
 function startBatchPoll(jobId, conversationId) {

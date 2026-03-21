@@ -603,19 +603,20 @@ TITLE_PROMPT = "Give a concise 3-6 word title for a conversation that starts wit
 
 
 def generate_title(first_user_message: str, provider: str = "anthropic") -> str:
+    truncated = " ".join(first_user_message.split()[:200])
     if provider == "openai":
         resp = openai_client.chat.completions.create(
             model="gpt-4.1-nano",
             max_tokens=30,
             timeout=30.0,
-            messages=[{"role": "user", "content": TITLE_PROMPT + first_user_message}],
+            messages=[{"role": "user", "content": TITLE_PROMPT + truncated}],
         )
         return resp.choices[0].message.content.strip()
     resp = anthropic_client.messages.create(
         model="claude-haiku-4-5-20251001",
         max_tokens=30,
         timeout=30.0,
-        messages=[{"role": "user", "content": TITLE_PROMPT + first_user_message}],
+        messages=[{"role": "user", "content": TITLE_PROMPT + truncated}],
     )
     return resp.content[0].text.strip()
 
