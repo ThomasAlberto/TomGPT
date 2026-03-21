@@ -17,6 +17,51 @@ const scrollDown = (force = false) => {
   }
 };
 
+function estimateTokens(text) {
+  if (!text) return 0;
+  return Math.ceil(text.length / 4);
+}
+
+function formatTokens(n) {
+  if (n >= 1000000) return `${(n / 1000000).toFixed(1)}M`;
+  if (n >= 1000) return `${(n / 1000).toFixed(1)}K`;
+  return String(n);
+}
+
+function updateTokenBar(messages) {
+  const bar = document.getElementById('token-bar');
+  const info = getModelInfo(getModel());
+  if (!info || !messages) { bar.style.display = 'none'; return; }
+
+  const contextWindow = info.context || 200000;
+  let totalChars = 0;
+  for (const m of messages) {
+    totalChars += (m.content || '').length;
+    if (m.thinking) totalChars += (typeof m.thinking === 'string' ? m.thinking : m.thinking.text || '').length;
+    if (m.pro_initial) totalChars += m.pro_initial.length;
+    if (m.pro_critique) totalChars += m.pro_critique.length;
+  }
+  const estTokens = Math.ceil(totalChars / 4);
+  const pct = Math.min((estTokens / contextWindow) * 100, 100);
+
+  // Memory: current tokens vs context window
+  document.getElementById('token-memory').textContent =
+    `Memory: ~${formatTokens(estTokens)} / ${formatTokens(contextWindow)}`;
+
+  // Memory Cost: what the next message will cost just for the history (input price per token)
+  const inputPricePerToken = info.input_price / 1000000;
+  const historyCost = estTokens * inputPricePerToken;
+  document.getElementById('token-cost').textContent =
+    `Next msg cost: ~$${historyCost < 0.01 ? historyCost.toFixed(4) : historyCost.toFixed(2)}`;
+
+  const fill = document.getElementById('token-meter-fill');
+  fill.style.width = pct + '%';
+  fill.style.background = pct > 75 ? '#ff6b6b' : pct > 50 ? '#f0a030' : 'var(--accent)';
+  bar.style.display = '';
+}
+
+let _currentMessages = null;
+
 function showToast(msg) {
   let toast = document.getElementById('toast');
   if (!toast) {
@@ -233,6 +278,7 @@ async function onModelChange() {
     });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     updateModeSelect();
+    if (_currentMessages) updateTokenBar(_currentMessages);
   } catch (err) {
     console.error('Failed to update model:', err);
     showToast('Failed to update model.');
@@ -774,6 +820,8 @@ async function selectConv(id) {
       // Resume polling for pending batch jobs
       resumeBatchPolls(conv.messages, id);
     }
+    _currentMessages = conv.messages || [];
+    updateTokenBar(_currentMessages);
     scrollDown(true);
     renderSidebar();
   } catch (err) {
@@ -790,6 +838,8 @@ async function delConv(id) {
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     if (currentId === id) {
       currentId = null;
+      _currentMessages = null;
+      document.getElementById('token-bar').style.display = 'none';
       document.getElementById('chat-area').innerHTML =
         '<div class="placeholder" id="placeholder">Select or create a conversation to begin</div>';
       document.getElementById('sp-input').value = '';
@@ -1207,6 +1257,11 @@ async function send() {
             if (convMap[currentId]) {
               convMap[currentId].title = data.title;
               renderSidebar();
+            }
+            if (_currentMessages) {
+              _currentMessages.push({role: 'user', content: msg});
+              _currentMessages.push({role: 'assistant', content: fullContent});
+              updateTokenBar(_currentMessages);
             }
           } else if (data.type === 'error') {
             throw new Error(data.message);

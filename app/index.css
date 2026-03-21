@@ -591,6 +591,24 @@ body {
 }
 #spt-new-btn:hover { background: var(--accent-hover); }
 
+/* Token counter bar */
+#token-bar {
+  background: var(--panel-bg); border-bottom: 1px solid var(--panel-border);
+  padding: 4px 16px; transition: background .25s;
+}
+#token-bar-inner {
+  display: flex; align-items: center; gap: 12px; font-size: 0.75rem; color: var(--muted);
+  white-space: nowrap;
+}
+#token-meter {
+  flex: 1; height: 4px; background: var(--input-border); border-radius: 2px;
+  overflow: hidden; max-width: 200px;
+}
+#token-meter-fill {
+  height: 100%; border-radius: 2px; width: 0;
+  transition: width .3s, background .3s;
+}
+
 /* Chat area */
 #chat-area {
   flex: 1; overflow-y: auto;
