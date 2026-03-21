@@ -428,6 +428,13 @@ async def upload_kb_document(folder_id: str, file: UploadFile):
             tmp_path = Path(tmp.name)
         text = _extract_pdf_text(tmp_path)
         tmp_path.unlink()
+    elif ext == ".docx":
+        import tempfile as _tf
+        with _tf.NamedTemporaryFile(suffix=".docx", delete=False) as tmp:
+            tmp.write(content)
+            tmp_path = Path(tmp.name)
+        text = _extract_docx_text(tmp_path)
+        tmp_path.unlink()
     elif ext in TEXT_EXTENSIONS:
         text = content.decode(errors="replace")
     else:
@@ -497,7 +504,7 @@ async def upload_file(file: UploadFile):
     }
 
 
-_COMMON_EXTENSIONS = [".pdf", ".txt", ".md", ".csv", ".json", ".py", ".js", ".ts", ".html", ".css", ".xml", ".yaml", ".yml", ".log"]
+_COMMON_EXTENSIONS = [".pdf", ".docx", ".txt", ".md", ".csv", ".json", ".py", ".js", ".ts", ".html", ".css", ".xml", ".yaml", ".yml", ".log"]
 
 
 def _find_upload(file_id: str) -> Path | None:
@@ -522,6 +529,16 @@ def _extract_pdf_text(file_path: Path) -> str:
         return f"[Error reading PDF: {e}]"
 
 
+def _extract_docx_text(file_path: Path) -> str:
+    try:
+        import docx
+        doc = docx.Document(file_path)
+        return "\n\n".join(p.text for p in doc.paragraphs if p.text.strip())
+    except Exception as e:
+        logger.warning("Failed to extract DOCX text from %s: %s", file_path.name, e)
+        return f"[Error reading DOCX: {e}]"
+
+
 def build_anthropic_blocks(message: str, file_refs: list[dict]) -> list[dict]:
     """Build Anthropic content blocks from text + attached files."""
     blocks = []
@@ -542,6 +559,9 @@ def build_anthropic_blocks(message: str, file_refs: list[dict]) -> list[dict]:
                     "data": pdf_b64,
                 },
             })
+        elif ext == ".docx":
+            text = _extract_docx_text(file_path)
+            blocks.append({"type": "text", "text": f"[File: {ref['filename']}]\n\n{text}"})
         elif ext in TEXT_EXTENSIONS:
             text = file_path.read_text(errors="replace")
             blocks.append({
@@ -565,6 +585,9 @@ def build_openai_content(message: str, file_refs: list[dict]) -> str:
         ext = file_path.suffix.lower()
         if ext == ".pdf":
             text = _extract_pdf_text(file_path)
+            parts.append(f"[File: {ref['filename']}]\n\n{text}")
+        elif ext == ".docx":
+            text = _extract_docx_text(file_path)
             parts.append(f"[File: {ref['filename']}]\n\n{text}")
         elif ext in TEXT_EXTENSIONS:
             text = file_path.read_text(errors="replace")
