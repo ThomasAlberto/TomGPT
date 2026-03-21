@@ -176,6 +176,68 @@ async def list_models():
     return [{"id": mid, **info} for mid, info in AVAILABLE_MODELS.items()]
 
 
+# ── Token counting ────────────────────────────────────────────────────────
+
+class TokenCountRequest(BaseModel):
+    conversation_id: str
+    model: str = "claude-sonnet-4-6"
+
+
+@app.post("/token-count")
+async def count_tokens(body: TokenCountRequest):
+    memory = load_memory()
+    conv = memory["conversations"].get(body.conversation_id)
+    if not conv:
+        raise HTTPException(status_code=404, detail="Conversation not found")
+
+    model = body.model if body.model in AVAILABLE_MODELS else "claude-sonnet-4-6"
+    provider = AVAILABLE_MODELS[model]["provider"]
+    messages = conv.get("messages", [])
+    system = _build_system_prompt(model, conv.get("system_prompt", ""))
+
+    t0 = time.time()
+
+    if provider == "anthropic":
+        api_messages = _build_anthropic_messages(messages)
+        token_count = None
+        for attempt in range(_MAX_RETRIES + 1):
+            try:
+                result = anthropic_client.messages.count_tokens(
+                    model=model, system=system, messages=api_messages,
+                )
+                token_count = result.input_tokens
+                break
+            except anthropic.APIStatusError as e:
+                if e.status_code in _RETRYABLE_STATUSES and attempt < _MAX_RETRIES:
+                    wait = 2 ** attempt
+                    logger.warning("count_tokens error %d, retrying in %ds (%d/%d)",
+                                   e.status_code, wait, attempt + 1, _MAX_RETRIES)
+                    time.sleep(wait)
+                else:
+                    logger.warning("count_tokens failed: %s", e)
+                    break
+            except Exception as e:
+                logger.warning("count_tokens failed: %s", e)
+                break
+        if token_count is None:
+            token_count = sum(len((m.get("content") or "").split()) for m in messages) * 1.3
+    else:
+        import tiktoken
+        try:
+            enc = tiktoken.encoding_for_model(model)
+        except KeyError:
+            enc = tiktoken.get_encoding("cl100k_base")
+        token_count = 0
+        token_count += len(enc.encode(system))
+        for m in messages:
+            token_count += len(enc.encode(m.get("content") or ""))
+
+    latency_ms = round((time.time() - t0) * 1000, 1)
+    logger.info("Token count: %d tokens, %.1fms (%s/%s)", token_count, latency_ms, model, provider)
+
+    return {"token_count": int(token_count), "latency_ms": latency_ms}
+
+
 # ── Conversation CRUD ──────────────────────────────────────────────────────
 
 @app.get("/conversations")

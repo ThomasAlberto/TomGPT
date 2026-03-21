@@ -33,6 +33,7 @@ function updateTokenBar(messages) {
   const info = getModelInfo(getModel());
   if (!info || !messages) { bar.style.display = 'none'; return; }
 
+  // Show bar immediately with estimate, then refine with exact count
   const contextWindow = info.context || 200000;
   let totalChars = 0;
   for (const m of messages) {
@@ -42,22 +43,40 @@ function updateTokenBar(messages) {
     if (m.pro_critique) totalChars += m.pro_critique.length;
   }
   const estTokens = Math.ceil(totalChars / 4);
-  const pct = Math.min((estTokens / contextWindow) * 100, 100);
+  _renderTokenBar(estTokens, contextWindow, info, '~');
+  bar.style.display = '';
 
-  // Memory: current tokens vs context window
+  // Fetch exact count from backend
+  if (currentId) {
+    fetch(`${API}/token-count`, {
+      method: 'POST', headers: h(),
+      body: JSON.stringify({ conversation_id: currentId, model: getModel() })
+    })
+    .then(r => r.ok ? r.json() : null)
+    .then(data => {
+      if (data) _renderTokenBar(data.token_count, contextWindow, info, '');
+    })
+    .catch(() => {});
+  }
+}
+
+function _renderTokenBar(tokens, contextWindow, info, prefix) {
+  const pct = Math.min((tokens / contextWindow) * 100, 100);
+
   document.getElementById('token-memory').textContent =
-    `Memory: ~${formatTokens(estTokens)} / ${formatTokens(contextWindow)}`;
+    `Memory: ${prefix}${formatTokens(tokens)} / ${formatTokens(contextWindow)}`;
 
-  // Memory Cost: what the next message will cost just for the history (input price per token)
+  const mode = document.getElementById('mode-select').value;
+  const inputMultiplier = mode === 'pro' ? 2 : 1;
   const inputPricePerToken = info.input_price / 1000000;
-  const historyCost = estTokens * inputPricePerToken;
+  const historyCost = tokens * inputPricePerToken * inputMultiplier;
+  const modeLabel = mode === 'pro' ? ' (2x Pro)' : '';
   document.getElementById('token-cost').textContent =
-    `Next msg cost: ~$${historyCost < 0.01 ? historyCost.toFixed(4) : historyCost.toFixed(2)}`;
+    `Next msg cost: ${prefix}$${historyCost < 0.01 ? historyCost.toFixed(4) : historyCost.toFixed(2)}${modeLabel}`;
 
   const fill = document.getElementById('token-meter-fill');
   fill.style.width = pct + '%';
   fill.style.background = pct > 75 ? '#ff6b6b' : pct > 50 ? '#f0a030' : 'var(--accent)';
-  bar.style.display = '';
 }
 
 let _currentMessages = null;
@@ -332,6 +351,7 @@ async function onModeChange() {
     console.error('Failed to update mode:', err);
     showToast('Failed to update mode.');
   }
+  if (_currentMessages) updateTokenBar(_currentMessages);
 }
 
 // ── Folders ────────────────────────────────────────────────────────────────
