@@ -99,8 +99,8 @@
 [data-theme="lydia"][data-mode="day"] #new-folder-btn { background: #98DB8B; color: #1a1a1a; }
 [data-theme="lydia"][data-mode="day"] #new-btn:hover,
 [data-theme="lydia"][data-mode="day"] #new-folder-btn:hover { background: #82c576; }
-[data-theme="lydia"][data-mode="day"] #send-btn { background: #98DB8B; color: #1a1a1a; }
-[data-theme="lydia"][data-mode="day"] #send-btn:hover:not(:disabled) { background: #82c576; }
+[data-theme="lydia"][data-mode="day"] .send-primary { background: #98DB8B !important; color: #1a1a1a !important; border-color: #98DB8B !important; }
+[data-theme="lydia"][data-mode="day"] .send-primary:hover:not(:disabled) { background: #82c576 !important; border-color: #82c576 !important; }
 [data-theme="lydia"][data-mode="day"] .kb-indicator { background: #98DB8B; }
 [data-theme="lydia"][data-mode="day"] #kb-upload-btn { background: #98DB8B; color: #1a1a1a; }
 [data-theme="lydia"][data-mode="day"] #kb-upload-btn:hover { background: #82c576; }
@@ -778,25 +778,26 @@ body {
   max-height: 160px; transition: border-color .15s, background .25s, color .25s; line-height: 1.5;
 }
 #msg-input:focus { border-color: var(--accent); }
-#send-btn {
-  padding: 10px 20px; background: var(--accent); color: #fff;
-  border: none; border-radius: 10px; cursor: pointer;
-  font-size: 0.93rem; transition: background .15s; flex-shrink: 0;
+#send-btn, #batch-btn {
+  padding: 10px 18px; border-radius: 10px; cursor: pointer;
+  font-size: 0.93rem; transition: background .15s, color .15s, border-color .15s; flex-shrink: 0;
 }
-#send-btn:hover:not(:disabled) { background: var(--accent-hover); }
 #send-btn:disabled { opacity: .45; cursor: not-allowed; }
+#send-btn.send-primary, #batch-btn.send-primary {
+  background: var(--accent); color: #fff; border: 1px solid var(--accent);
+}
+#send-btn.send-primary:hover:not(:disabled), #batch-btn.send-primary:hover { background: var(--accent-hover); border-color: var(--accent-hover); }
+#send-btn.send-secondary, #batch-btn.send-secondary {
+  background: transparent; color: var(--accent); border: 1px solid var(--accent);
+  font-size: 0.85rem;
+}
+#send-btn.send-secondary:hover, #batch-btn.send-secondary:hover { background: var(--accent); color: #fff; }
 #stop-btn {
   padding: 10px 20px; background: #ff6b6b; color: #fff;
   border: none; border-radius: 10px; cursor: pointer;
   font-size: 0.93rem; transition: background .15s; flex-shrink: 0;
 }
 #stop-btn:hover { background: #e55a5a; }
-#batch-btn {
-  padding: 10px 16px; background: transparent; color: var(--accent);
-  border: 1px solid var(--accent); border-radius: 10px; cursor: pointer;
-  font-size: 0.85rem; transition: background .15s, color .15s; flex-shrink: 0;
-}
-#batch-btn:hover { background: var(--accent); color: #fff; }
 
 /* Batch pending bubble */
 .batch-pending {

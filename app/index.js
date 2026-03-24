@@ -94,8 +94,37 @@ function showToast(msg) {
   toast._timer = setTimeout(() => toast.classList.remove('visible'), 4000);
 }
 
+function getDefaultSendAction() {
+  return localStorage.getItem('defaultSendAction') || 'send';
+}
+
+function setDefaultSendAction(action) {
+  localStorage.setItem('defaultSendAction', action);
+  updateSendButtonStyles();
+}
+
+function updateSendButtonStyles() {
+  const def = getDefaultSendAction();
+  const sendBtn = document.getElementById('send-btn');
+  const batchBtn = document.getElementById('batch-btn');
+  if (def === 'batch') {
+    sendBtn.classList.add('send-secondary');
+    sendBtn.classList.remove('send-primary');
+    batchBtn.classList.add('send-primary');
+    batchBtn.classList.remove('send-secondary');
+  } else {
+    sendBtn.classList.add('send-primary');
+    sendBtn.classList.remove('send-secondary');
+    batchBtn.classList.add('send-secondary');
+    batchBtn.classList.remove('send-primary');
+  }
+}
+
 function handleKey(e) {
-  if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); }
+  if (e.key === 'Enter' && !e.shiftKey) {
+    e.preventDefault();
+    if (getDefaultSendAction() === 'batch') sendBatch(); else send();
+  }
 }
 
 function autoResize(el) {
@@ -1190,6 +1219,7 @@ let currentAbortController = null;
 
 async function send() {
   if (!currentId) { alert('Select or create a conversation first.'); return; }
+  setDefaultSendAction('send');
   const input = document.getElementById('msg-input');
   const msg   = input.value.trim();
   if (!msg && !pendingFiles.length) return;
@@ -1197,6 +1227,7 @@ async function send() {
   input.value = '';
   autoResize(input);
   document.getElementById('send-btn').style.display = 'none';
+  document.getElementById('batch-btn').style.display = 'none';
   document.getElementById('stop-btn').style.display = 'inline-block';
   document.getElementById('placeholder')?.remove();
 
@@ -1308,6 +1339,7 @@ async function send() {
     currentAbortController = null;
     document.getElementById('stop-btn').style.display = 'none';
     document.getElementById('send-btn').style.display = 'inline-block';
+    document.getElementById('batch-btn').style.display = 'inline-block';
     document.getElementById('send-btn').disabled = false;
     input.focus();
   }
@@ -1418,6 +1450,7 @@ let activeBatchJobs = {}; // { jobId: { conversationId, interval } }
 
 async function sendBatch() {
   if (!currentId) { alert('Select or create a conversation first.'); return; }
+  setDefaultSendAction('batch');
   const input = document.getElementById('msg-input');
   const msg = input.value.trim();
   if (!msg && !pendingFiles.length) return;
@@ -1559,5 +1592,6 @@ async function init() {
   await Promise.all([loadModels(), loadList(), loadFolders(), loadPromptTemplates(), loadAudioVoices()]);
   renderSidebar();
   initPricingTooltip();
+  updateSendButtonStyles();
 }
 init();
